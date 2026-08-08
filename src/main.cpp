@@ -38,6 +38,8 @@ constexpr int kSettingsCloseY = 55;
 constexpr int kSettingsCloseRadius = 25;
 constexpr int kSettingsSliderLeft = 103;
 constexpr int kSettingsSliderRight = 363;
+constexpr std::uint32_t kLeftPhysicalButtonColor = 0xFFAC28;
+constexpr std::uint32_t kRightPhysicalButtonColor = 0x2D8CFF;
 constexpr std::uint32_t kButtonChordGraceMs = 90;
 constexpr std::uint32_t kPhysicalMicHoldMs = 350;
 constexpr std::uint32_t kUiAnimationPeriodMs = 80;
@@ -1190,8 +1192,8 @@ void drawAssistantGlyph(int x, int y, std::uint16_t color) {
 
 void drawPhysicalModeHints() {
     const auto panel = M5.Display.color565(22, 27, 35);
-    const auto approve = M5.Display.color565(48, 206, 125);
-    const auto cancel = M5.Display.color565(245, 83, 103);
+    const auto approve = scaledColor(kLeftPhysicalButtonColor, 1.0f);
+    const auto cancel = scaledColor(kRightPhysicalButtonColor, 1.0f);
     constexpr int hintY = 29;
     constexpr int leftX = 68;
     constexpr int rightX = 398;
@@ -1409,7 +1411,8 @@ void renderUi(std::uint32_t now) {
         bool selected = false;
         if (g_actionLayer) {
             static constexpr std::uint32_t kActionColors[kActionCount] = {
-                0x9D74FF, 0x30CE7D, 0xF55367, 0x33C4E8, 0xE5E8EF,
+                0x9D74FF, kLeftPhysicalButtonColor, kRightPhysicalButtonColor,
+                0x33C4E8, 0xE5E8EF,
             };
             accent = scaledColor(kActionColors[i], 1.0f);
             selected = g_selectedAction == i;
@@ -1550,18 +1553,18 @@ void drawSplashFrame(float progress) {
     // The Orbitron face matches the technical visual language of the main UI.
     M5.Display.setTextDatum(middle_center);
     M5.Display.setFont(&fonts::Orbitron_Light_32);
-    M5.Display.setTextSize(0.92f);
+    M5.Display.setTextSize(1.24f);
     M5.Display.setTextColor(purple, TFT_BLACK);
-    M5.Display.drawString("VIBEWATCH", kScreenCenter, 205);
+    M5.Display.drawString("VIBEWATCH", kScreenCenter, 202);
 
     M5.Display.setFont(&fonts::Orbitron_Light_24);
-    M5.Display.setTextSize(0.48f);
+    M5.Display.setTextSize(0.62f);
     M5.Display.setTextColor(cyan, TFT_BLACK);
-    M5.Display.drawString("AI CONTROL SURFACE", kScreenCenter, 247);
+    M5.Display.drawString("AI CONTROL SURFACE", kScreenCenter, 252);
 
-    M5.Display.setTextSize(0.52f);
+    M5.Display.setTextSize(0.68f);
     M5.Display.setTextColor(muted, TFT_BLACK);
-    M5.Display.drawString(vibe::kFirmwareVersion, kScreenCenter, 286);
+    M5.Display.drawString(vibe::kFirmwareVersion, kScreenCenter, 291);
 
     // A small center mark gives the logo a watch-dial focal point.
     M5.Display.fillCircle(kScreenCenter, 151, 4, cyan);
@@ -1574,6 +1577,10 @@ void drawSplashFrame(float progress) {
 void showSplashScreen() {
     constexpr std::uint32_t kSplashAnimationMs = 1250;
     constexpr std::uint32_t kSplashHoldMs = 350;
+
+    // Let the first logo frame appear before the short rising startup jingle.
+    drawSplashFrame(0.16f);
+    sound::playEffect(sound::Effect::Start, g_seVolume, 2);
     const std::uint32_t startedAt = millis();
 
     while (millis() - startedAt < kSplashAnimationMs) {
@@ -1605,10 +1612,10 @@ void setup() {
     M5.Display.setBrightness(80);
     M5.Display.setRotation(0);
 
-    showSplashScreen();
-
     loadPreferences();
     M5.Speaker.setVolume(g_seVolume);
+    showSplashScreen();
+
     initializeAgentPositions();
     g_rpcQueue = xQueueCreate(6, sizeof(char*));
     if (g_rpcQueue == nullptr) {
