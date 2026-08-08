@@ -4,7 +4,6 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <Preferences.h>
-#include <esp_system.h>
 
 #include <algorithm>
 #include <array>
@@ -1604,20 +1603,36 @@ void drawSplashFrame(float progress) {
 void showSplashScreen() {
     constexpr std::uint32_t kSplashAnimationMs = 1800;
     constexpr std::uint32_t kSplashHoldMs = 1100;
-    constexpr std::uint32_t kPicoIntervalMs = 100;
+    struct ChiptuneNote {
+        std::uint32_t atMs;
+        float frequency;
+        std::uint32_t durationMs;
+    };
+    // Original NES-style pulse-wave arpeggio; no existing game melody is used.
+    static constexpr ChiptuneNote kStartupJingle[] = {
+        {70, 293.66f, 70},   // D4
+        {160, 440.00f, 70},  // A4
+        {250, 587.33f, 80},  // D5
+        {360, 698.46f, 85},  // F5
+        {480, 880.00f, 95},  // A5
+        {610, 698.46f, 65},  // F5
+        {700, 880.00f, 75},  // A5
+        {800, 1174.66f, 240},  // D6
+    };
+    constexpr std::size_t kJingleNoteCount =
+        sizeof(kStartupJingle) / sizeof(kStartupJingle[0]);
 
     drawSplashFrame(0.0f);
-    std::srand(esp_random());
     const std::uint32_t startedAt = millis();
-    std::uint32_t nextPicoAt = 0;
+    std::size_t nextNote = 0;
 
     while (millis() - startedAt < kSplashAnimationMs) {
         const std::uint32_t elapsed = millis() - startedAt;
-        if (elapsed >= nextPicoAt) {
-            // Match LLMCardputer's random sample-and-hold startup sound.
-            const int frequency = 400 + std::rand() % 800;
-            sound::playTriangle(static_cast<float>(frequency), 80, g_seVolume);
-            nextPicoAt += kPicoIntervalMs;
+        while (nextNote < kJingleNoteCount &&
+               elapsed >= kStartupJingle[nextNote].atMs) {
+            const auto& note = kStartupJingle[nextNote];
+            playSe(note.frequency, note.durationMs);
+            ++nextNote;
         }
         const float progress = static_cast<float>(elapsed) /
                                static_cast<float>(kSplashAnimationMs);
