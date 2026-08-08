@@ -38,7 +38,7 @@ constexpr Note kStartMelody[] = {
     {294, kNote32Ms}, {0, kNote32Ms}, {440, kNote32Ms}, {-1, -1},
 };
 
-void playTriangle(float frequency, std::uint32_t durationMs) {
+void playTriangleWave(float frequency, std::uint32_t durationMs) {
     if (frequency <= 0.0f) {
         M5.Speaker.stop(1);
         return;
@@ -58,6 +58,14 @@ void playSquare(float frequency, std::uint32_t durationMs, std::uint8_t volume) 
     M5.Speaker.tone(frequency, durationMs, 0, true, kSquareWave, sizeof(kSquareWave), false);
 }
 
+void playTriangle(float frequency, std::uint32_t durationMs, std::uint8_t volume) {
+    if (volume == 0) {
+        return;
+    }
+    M5.Speaker.setVolume(volume);
+    playTriangleWave(frequency, durationMs);
+}
+
 void playEffect(Effect effect, std::uint8_t volume, std::uint8_t tempoMultiplier) {
     if (volume == 0) {
         return;
@@ -69,7 +77,7 @@ void playEffect(Effect effect, std::uint8_t volume, std::uint8_t tempoMultiplier
         const int noteIndex = effect == Effect::Start ? i : kStartNoteCount - 1 - i;
         const auto& note = kStartMelody[noteIndex];
         const int durationMs = std::max(1, note.durationMs / tempoMultiplier);
-        playTriangle(static_cast<float>(note.frequency), durationMs);
+        playTriangleWave(static_cast<float>(note.frequency), durationMs);
         delay(durationMs);
     }
 }
