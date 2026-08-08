@@ -100,6 +100,19 @@ Vibe Watch repurposes the official [Watch Accessory Kit for the M5Stick Series](
 6. Center the mount on the rear of the StopWatch, press it down firmly, and allow the adhesive to reach its specified bond strength.
 7. Refit the nylon strap and perform a firm pull test before wearing it.
 
+### Wrist-Mount Build Photos
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-01-parts.jpg" alt="M5Stack watch accessory kit parts and Vibe Watch"><br><strong>1. Choose the watch mount</strong><br>Use the rectangular Watch Mount Accessory supplied with the official kit.</td>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-02-cut-hooks.jpg" alt="Cutting the M5Stick retaining hooks from the watch mount"><br><strong>2. Remove the retaining hooks</strong><br>Cut each raised M5Stick hook carefully with small nippers.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-03-trim-hooks.jpg" alt="Trimming the remaining plastic hook material"><br><strong>3. Make the surface flat</strong><br>Trim the remaining plastic and remove sharp edges.</td>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-04-adhesive.jpg" alt="Modified watch mount attached to the rear of Vibe Watch with strong double-sided tape"><br><strong>4. Bond and test</strong><br>Attach the centered mount with high-strength double-sided tape, then pull-test it before wearing.</td>
+  </tr>
+</table>
+
 The conversion preserves the original StopWatch case and uses only the modified kit part plus adhesive. It makes the interface instantly available while moving around, not only when sitting at a desk.
 
 ## Impact and Usefulness

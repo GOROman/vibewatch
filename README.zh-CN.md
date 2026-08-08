@@ -84,6 +84,19 @@ Vibe Watch将官方[Watch Accessory Kit for M5Stick Series](https://shop.m5stack
 6. 将支架对准StopWatch背面中央，用力压紧，并按照胶带要求等待粘接完成。
 7. 重新安装尼龙表带，佩戴前进行牢固的拉力测试。
 
+### 腕带支架加工照片
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-01-parts.jpg" alt="M5Stack腕表配件套件零件与Vibe Watch"><br><strong>1. 选择支架</strong><br>使用官方套件附带的矩形Watch Mount Accessory。</td>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-02-cut-hooks.jpg" alt="剪除支架上的M5Stick固定卡扣"><br><strong>2. 剪除固定卡扣</strong><br>使用小型剪钳逐个小心剪除凸起的M5Stick卡扣。</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-03-trim-hooks.jpg" alt="修整残留的塑料卡扣材料"><br><strong>3. 整平粘接面</strong><br>修整残留塑料并去除尖锐边缘。</td>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-04-adhesive.jpg" alt="用高强度双面胶将改造后的支架固定在Vibe Watch背面"><br><strong>4. 粘接并测试</strong><br>用高强度双面胶将支架居中固定，佩戴前进行拉力测试。</td>
+  </tr>
+</table>
+
 这一改造无需切削StopWatch外壳，只使用改造后的套件零件和双面胶。无论坐在桌前还是移动中，界面都能随时使用。
 
 ## 影响与实用价值

@@ -84,6 +84,19 @@ M5Stack StopWatchは、別のコントローラーに接続した受動的な画
 6. StopWatch背面の中央へマウントを合わせて強く圧着し、指定された接着時間を待ちます。
 7. ナイロンストラップを戻し、装着前に十分な引っ張りテストを行います。
 
+### 腕時計マウントの加工写真
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-01-parts.jpg" alt="M5Stack腕時計アクセサリーキットの部品とVibe Watch"><br><strong>1. マウントを選ぶ</strong><br>公式キットに付属する矩形のWatch Mount Accessoryを使用します。</td>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-02-cut-hooks.jpg" alt="Watch Mount AccessoryのM5Stick固定用突起を切断"><br><strong>2. 固定用突起を切る</strong><br>小型ニッパーでM5Stick固定用の突起を1つずつ慎重に切ります。</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-03-trim-hooks.jpg" alt="残ったプラスチック突起を整える工程"><br><strong>3. 接着面を平らにする</strong><br>残ったプラスチックと鋭い部分を整えます。</td>
+    <td width="50%" valign="top"><img src="docs/images/wrist-mount-04-adhesive.jpg" alt="強力両面テープでVibe Watch背面へ固定したマウント"><br><strong>4. 圧着して確認する</strong><br>強力両面テープで中央へ固定し、装着前に引っ張りテストを行います。</td>
+  </tr>
+</table>
+
 StopWatch本体のケースを加工せず、キット部品と両面テープだけでウェアラブル化できます。机の前だけでなく、移動中もインターフェースをすぐ使えます。
 
 ## 効果と有用性
