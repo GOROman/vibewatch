@@ -33,18 +33,23 @@ constexpr int kSettingsX = 72;
 constexpr int kSettingsY = 370;
 constexpr int kSettingsRadius = 22;
 constexpr int kSettingsVisualRadius = 16;
-constexpr int kSettingsCloseX = 340;
-constexpr int kSettingsCloseY = 62;
-constexpr int kSettingsCloseRadius = 31;
+constexpr int kSettingsCloseX = 365;
+constexpr int kSettingsCloseY = 55;
+constexpr int kSettingsCloseRadius = 25;
+constexpr int kSettingsSliderLeft = 103;
+constexpr int kSettingsSliderRight = 363;
 constexpr std::uint32_t kButtonChordGraceMs = 90;
 constexpr std::uint32_t kPhysicalMicHoldMs = 350;
 constexpr std::uint32_t kUiAnimationPeriodMs = 80;
-constexpr std::uint32_t kSelectionAnimationPeriodMs = 24;
-constexpr std::uint32_t kSelectionAnimationBaseMs = 210;
+constexpr std::uint32_t kSelectionAnimationPeriodMs = 16;
+constexpr std::uint32_t kSelectionAnimationBaseMs = 88;
 constexpr std::uint32_t kBatteryUpdatePeriodMs = 30000;
 constexpr char kPreferencesNamespace[] = "vibe-watch";
 constexpr char kDeviceSlotKey[] = "device-slot";
 constexpr char kSeVolumeKey[] = "se-volume";
+constexpr char kVibrationStrengthKey[] = "vibe-strength";
+constexpr char kAgentStateSeKey[] = "state-se";
+constexpr char kAgentStateVibeKey[] = "state-vibe";
 
 // Hit-test results share one integer space. Non-negative values below
 // kAgentCount are outer-ring items; the remaining values identify fixed UI
@@ -57,6 +62,9 @@ constexpr int kTouchSlot2 = kAgentCount + 4;
 constexpr int kTouchSlot3 = kAgentCount + 5;
 constexpr int kTouchPair = kAgentCount + 6;
 constexpr int kTouchVolume = kAgentCount + 7;
+constexpr int kTouchVibrationStrength = kAgentCount + 8;
+constexpr int kTouchAgentStateSe = kAgentCount + 9;
+constexpr int kTouchAgentStateVibe = kAgentCount + 10;
 
 struct AgentState {
     std::uint32_t color = 0;
@@ -76,8 +84,8 @@ struct AmbientState {
 // Runtime state
 // -----------------------------------------------------------------------------
 
-// Visual state received from the host. Agent colors communicate per-chat state,
-// while the ambient state drives the thin animation around the display edge.
+// Visual state received from the host. Agent colors communicate per-chat state;
+// ambient data is retained for protocol compatibility but is not drawn at the bezel.
 std::array<AgentState, kAgentCount> g_agents;
 AmbientState g_ambient;
 String g_focusedApp;
@@ -93,6 +101,7 @@ QueueHandle_t g_rpcQueue = nullptr;
 
 volatile bool g_connected = false;
 volatile bool g_uiDirty = true;
+volatile bool g_pairingSuccessPending = false;
 String g_rxBuffer;
 
 // Input state is intentionally explicit because a physical-button press may
@@ -134,6 +143,10 @@ bool g_touchActionLayer = false;
 std::uint32_t g_restartAt = 0;
 char g_deviceName[24] = {};
 std::uint8_t g_seVolume = 128;
+std::uint8_t g_vibrationStrength = 255;
+bool g_agentStateSeEnabled = true;
+bool g_agentStateVibeEnabled = true;
+std::uint32_t g_lastAgentFeedbackAt = 0;
 
 std::array<int, kAgentCount> agentX{};
 std::array<int, kAgentCount> agentY{};
@@ -144,11 +157,14 @@ std::array<int, kActionCount> actionY{};
 // Preferences, sound, color, haptics, and battery helpers
 // -----------------------------------------------------------------------------
 
-void loadDeviceSlot() {
+void loadPreferences() {
     Preferences preferences;
     preferences.begin(kPreferencesNamespace, true);
     g_deviceSlot = preferences.getUChar(kDeviceSlotKey, 1);
     g_seVolume = preferences.getUChar(kSeVolumeKey, 128);
+    g_vibrationStrength = preferences.getUChar(kVibrationStrengthKey, 255);
+    g_agentStateSeEnabled = preferences.getBool(kAgentStateSeKey, true);
+    g_agentStateVibeEnabled = preferences.getBool(kAgentStateVibeKey, true);
     preferences.end();
     if (g_deviceSlot < 1 || g_deviceSlot > 3) {
         g_deviceSlot = 1;
@@ -168,6 +184,15 @@ void saveSeVolume() {
     Preferences preferences;
     preferences.begin(kPreferencesNamespace, false);
     preferences.putUChar(kSeVolumeKey, g_seVolume);
+    preferences.end();
+}
+
+void saveFeedbackSettings() {
+    Preferences preferences;
+    preferences.begin(kPreferencesNamespace, false);
+    preferences.putUChar(kVibrationStrengthKey, g_vibrationStrength);
+    preferences.putBool(kAgentStateSeKey, g_agentStateSeEnabled);
+    preferences.putBool(kAgentStateVibeKey, g_agentStateVibeEnabled);
     preferences.end();
 }
 
@@ -212,9 +237,6 @@ bool uiIsAnimated() {
     if (g_selectionAnimating) {
         return true;
     }
-    if (g_ambient.effect == 2 || g_ambient.effect == 3 || g_ambient.effect == 4 || g_ambient.effect == 6) {
-        return true;
-    }
     for (const auto& state : g_agents) {
         if (state.effect == 4 || state.effect == 6) {
             return true;
@@ -224,7 +246,12 @@ bool uiIsAnimated() {
 }
 
 void vibrate(std::uint8_t strength = 120, std::uint32_t durationMs = 25) {
-    M5.Power.setVibration(strength);
+    if (strength == 0 || g_vibrationStrength == 0) {
+        return;
+    }
+    const auto scaledStrength = static_cast<std::uint8_t>(std::max(
+        1U, (static_cast<unsigned>(strength) * g_vibrationStrength + 127U) / 255U));
+    M5.Power.setVibration(scaledStrength);
     g_vibrationOffAt = millis() + durationMs;
 }
 
@@ -325,16 +352,39 @@ void applyAgentStatus(JsonVariantConst params) {
     if (!params.is<JsonArrayConst>()) {
         return;
     }
+    int firstChangedAgent = -1;
     for (JsonObjectConst item : params.as<JsonArrayConst>()) {
         const int id = item["id"] | -1;
         if (id < 0 || id >= kAgentCount) {
             continue;
         }
+        AgentState next;
+        next.color = item["c"] | 0U;
+        next.brightness = item["b"] | 0.0f;
+        next.effect = item["e"] | 0;
+        next.speed = item["s"] | 0.0f;
         auto& state = g_agents[id];
-        state.color = item["c"] | 0U;
-        state.brightness = item["b"] | 0.0f;
-        state.effect = item["e"] | 0;
-        state.speed = item["s"] | 0.0f;
+        const bool changed = state.color != next.color ||
+                             std::abs(state.brightness - next.brightness) > 0.001f ||
+                             state.effect != next.effect ||
+                             std::abs(state.speed - next.speed) > 0.001f;
+        if (changed && firstChangedAgent < 0) {
+            firstChangedAgent = id;
+        }
+        state = next;
+    }
+
+    // A single compact cue represents one host update even when several
+    // agents change together. Throttling prevents rapid updates from stacking.
+    const std::uint32_t now = millis();
+    if (firstChangedAgent >= 0 && now - g_lastAgentFeedbackAt >= 120) {
+        if (g_agentStateSeEnabled) {
+            playSe(680.0f + firstChangedAgent * 70.0f, 50);
+        }
+        if (g_agentStateVibeEnabled) {
+            vibrate(190, 42);
+        }
+        g_lastAgentFeedbackAt = now;
     }
     g_uiDirty = true;
 }
@@ -489,7 +539,12 @@ class HidServerCallbacks : public NimBLEServerCallbacks {
         if (!connection.isEncrypted()) {
             Serial.println("BLE encryption failed");
             NimBLEDevice::getServer()->disconnect(connection.getConnHandle());
+            return;
         }
+        // Defer hardware feedback to Arduino's main loop; NimBLE owns this
+        // callback task and should only publish the successful result.
+        g_pairingSuccessPending = true;
+        Serial.println("BLE pairing authenticated");
     }
 };
 
@@ -608,14 +663,20 @@ float selectionProgress(std::uint32_t now) {
                    static_cast<float>(g_selectionAnimationDurationMs));
 }
 
-float smoothSelectionProgress(float progress) {
-    // Cosine ease-in/out gives the ring a soft launch and a clean, magnetic
-    // landing without the abrupt midpoint acceleration of linear movement.
-    return 0.5f - 0.5f * std::cos(progress * PI);
+float snappySelectionProgress(float progress) {
+    // Ease-out-back moves decisively, overshoots by a few pixels, then snaps
+    // onto the target like a spring-loaded watch mechanism.
+    if (progress >= 1.0f) {
+        return 1.0f;
+    }
+    constexpr float kOvershoot = 1.10f;
+    const float shifted = progress - 1.0f;
+    return 1.0f + (kOvershoot + 1.0f) * shifted * shifted * shifted +
+           kOvershoot * shifted * shifted;
 }
 
 void selectionPositionAt(std::uint32_t now, float& x, float& y) {
-    const float eased = smoothSelectionProgress(selectionProgress(now));
+    const float eased = snappySelectionProgress(selectionProgress(now));
     const float angle = g_selectionFromAngle +
                         (g_selectionToAngle - g_selectionFromAngle) * eased;
     x = kScreenCenter + std::cos(angle) * kAgentOrbitRadius;
@@ -645,10 +706,10 @@ void selectAgent(int index) {
     g_selectionToY = static_cast<float>(agentY[index]);
     g_selectionFromAngle = currentAngle;
     g_selectionToAngle = currentAngle + angleDelta;
-    // Nearby steps stay snappy; a jump across the dial gets enough time to
-    // remain readable. Range is roughly 260-360 ms.
+    // Nearby steps complete in about 123 ms; even a half-turn finishes under
+    // 200 ms so physical-button navigation feels immediate.
     g_selectionAnimationDurationMs = kSelectionAnimationBaseMs +
-        static_cast<std::uint32_t>(150.0f * std::abs(angleDelta) / PI);
+        static_cast<std::uint32_t>(105.0f * std::abs(angleDelta) / PI);
     g_selectionAnimationStartedAt = now;
     g_selectionAnimating = true;
     g_selectedAgent = index;
@@ -671,16 +732,25 @@ int hitTestSettings(int x, int y) {
     }
     for (int i = 0; i < 3; ++i) {
         const int dx = x - (122 + i * 111);
-        const int dy = y - 150;
-        if (dx * dx + dy * dy <= 48 * 48) {
+        const int dy = y - 112;
+        if (dx * dx + dy * dy <= 34 * 34) {
             return kTouchSlot1 + i;
         }
     }
-    if (pointInRect(x, y, 113, 215, 240, 76)) {
+    if (pointInRect(x, y, 153, 151, 160, 45)) {
         return kTouchPair;
     }
-    if (pointInRect(x, y, 80, 325, 306, 80)) {
+    if (pointInRect(x, y, 80, 205, 306, 55)) {
         return kTouchVolume;
+    }
+    if (pointInRect(x, y, 80, 267, 306, 55)) {
+        return kTouchVibrationStrength;
+    }
+    if (pointInRect(x, y, 70, 352, 145, 55)) {
+        return kTouchAgentStateSe;
+    }
+    if (pointInRect(x, y, 230, 352, 170, 55)) {
+        return kTouchAgentStateVibe;
     }
     return -1;
 }
@@ -709,9 +779,19 @@ int hitTestMain(int x, int y) {
 }
 
 void updateVolumeFromTouch(int x) {
-    const int boundedX = std::max(103, std::min(363, x));
-    g_seVolume = static_cast<std::uint8_t>((boundedX - 103) * 255 / 260);
+    const int boundedX = std::max(kSettingsSliderLeft, std::min(kSettingsSliderRight, x));
+    g_seVolume = static_cast<std::uint8_t>(
+        (boundedX - kSettingsSliderLeft) * 255 /
+        (kSettingsSliderRight - kSettingsSliderLeft));
     M5.Speaker.setVolume(g_seVolume);
+    g_uiDirty = true;
+}
+
+void updateVibrationStrengthFromTouch(int x) {
+    const int boundedX = std::max(kSettingsSliderLeft, std::min(kSettingsSliderRight, x));
+    g_vibrationStrength = static_cast<std::uint8_t>(
+        (boundedX - kSettingsSliderLeft) * 255 /
+        (kSettingsSliderRight - kSettingsSliderLeft));
     g_uiDirty = true;
 }
 
@@ -739,11 +819,27 @@ void handleSettingsTouch(const m5::Touch_Class::touch_detail_t& touch) {
             vibrate(150, 35);
         } else if (g_activeTouch == kTouchVolume) {
             updateVolumeFromTouch(touch.x);
+        } else if (g_activeTouch == kTouchVibrationStrength) {
+            updateVibrationStrengthFromTouch(touch.x);
+        } else if (g_activeTouch == kTouchAgentStateSe) {
+            g_agentStateSeEnabled = !g_agentStateSeEnabled;
+            saveFeedbackSettings();
+            playSe(g_agentStateSeEnabled ? 1040.0f : 620.0f, 45);
+            vibrate(90, 20);
+        } else if (g_activeTouch == kTouchAgentStateVibe) {
+            g_agentStateVibeEnabled = !g_agentStateVibeEnabled;
+            saveFeedbackSettings();
+            playSe(g_agentStateVibeEnabled ? 1040.0f : 620.0f, 45);
+            vibrate(130, 28);
         }
         g_uiDirty = true;
     }
-    if (touch.isPressed() && g_activeTouch == kTouchVolume) {
-        updateVolumeFromTouch(touch.x);
+    if (touch.isPressed()) {
+        if (g_activeTouch == kTouchVolume) {
+            updateVolumeFromTouch(touch.x);
+        } else if (g_activeTouch == kTouchVibrationStrength) {
+            updateVibrationStrengthFromTouch(touch.x);
+        }
     }
     if (touch.wasReleased() && g_activeTouch >= 0) {
         if (g_activeTouch == kTouchPair) {
@@ -751,6 +847,9 @@ void handleSettingsTouch(const m5::Touch_Class::touch_detail_t& touch) {
         } else if (g_activeTouch == kTouchVolume) {
             saveSeVolume();
             playSe(980.0f, 70);
+        } else if (g_activeTouch == kTouchVibrationStrength) {
+            saveFeedbackSettings();
+            vibrate(255, 70);
         }
         g_activeTouch = -1;
         g_uiDirty = true;
@@ -989,26 +1088,6 @@ void handlePhysicalButtons() {
 // Rendering
 // -----------------------------------------------------------------------------
 
-void drawAmbient(std::uint32_t now) {
-    const float brightness = effectBrightness(g_ambient.effect, g_ambient.brightness, g_ambient.speed, now);
-    const auto dimColor = scaledColor(g_ambient.color, brightness * 0.18f);
-    const auto color = scaledColor(g_ambient.color, brightness);
-    for (int r = 226; r <= 230; ++r) {
-        M5.Display.drawCircle(kScreenCenter, kScreenCenter, r, dimColor);
-    }
-    if (g_ambient.effect == 2 || g_ambient.effect == 3) {
-        const float turnsPerSecond = 0.08f + clamp01(g_ambient.speed) * 0.6f;
-        const float angle = static_cast<float>(now % 20000) * 0.001f * turnsPerSecond * 2.0f * PI;
-        const int x = kScreenCenter + static_cast<int>(std::cos(angle) * 228);
-        const int y = kScreenCenter + static_cast<int>(std::sin(angle) * 228);
-        M5.Display.fillCircle(x, y, 8, color);
-    } else if (g_ambient.effect != 0) {
-        for (int r = 226; r <= 230; ++r) {
-            M5.Display.drawCircle(kScreenCenter, kScreenCenter, r, color);
-        }
-    }
-}
-
 void drawThickCircle(int x, int y, int radius, int thickness, std::uint16_t color) {
     for (int i = 0; i < thickness; ++i) {
         M5.Display.drawCircle(x, y, radius - i, color);
@@ -1032,8 +1111,8 @@ void drawSelectionIndicator(std::uint32_t now) {
             0x30234D, 0x49346F, 0x684A9A, 0x8964C5,
         };
         for (int trail = 4; trail >= 1; --trail) {
-            const float sample = std::max(0.0f, rawProgress - trail * 0.065f);
-            const float eased = smoothSelectionProgress(sample);
+            const float sample = std::max(0.0f, rawProgress - trail * 0.11f);
+            const float eased = snappySelectionProgress(sample);
             const float angle = g_selectionFromAngle +
                                 (g_selectionToAngle - g_selectionFromAngle) * eased;
             const int x = kScreenCenter + static_cast<int>(std::lround(
@@ -1048,9 +1127,14 @@ void drawSelectionIndicator(std::uint32_t now) {
     selectionPositionAt(now, g_selectionX, g_selectionY);
     const int x = static_cast<int>(std::lround(g_selectionX));
     const int y = static_cast<int>(std::lround(g_selectionY));
-    drawThickCircle(x, y, kAgentButtonRadius + 4, 3, M5.Display.color565(74, 56, 128));
-    drawThickCircle(x, y, kAgentButtonRadius, 7, M5.Display.color565(163, 132, 255));
-    drawThickCircle(x, y, kAgentButtonRadius - 9, 2, TFT_WHITE);
+    const float landingProgress = clamp01((rawProgress - 0.62f) / 0.38f);
+    const int landingPulse = g_selectionAnimating
+        ? static_cast<int>(std::lround(std::sin(landingProgress * PI) * 5.0f))
+        : 0;
+    const int indicatorRadius = kAgentButtonRadius + landingPulse;
+    drawThickCircle(x, y, indicatorRadius + 4, 3, M5.Display.color565(74, 56, 128));
+    drawThickCircle(x, y, indicatorRadius, 7, M5.Display.color565(163, 132, 255));
+    drawThickCircle(x, y, indicatorRadius - 9, 2, TFT_WHITE);
 
     if (g_selectionAnimating && rawProgress >= 1.0f) {
         g_selectionAnimating = false;
@@ -1206,12 +1290,13 @@ void renderSettingsUi() {
 
     M5.Display.setTextDatum(middle_center);
     M5.Display.setFont(&fonts::Orbitron_Light_32);
-    M5.Display.setTextSize(1);
+    M5.Display.setTextSize(0.82f);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.drawString("BLUETOOTH", kScreenCenter, 48);
+    M5.Display.drawString("SETTINGS", 218, 38);
     M5.Display.setFont(&fonts::DejaVu18);
+    M5.Display.setTextSize(0.78f);
     M5.Display.setTextColor(muted, TFT_BLACK);
-    M5.Display.drawString("DEVICE NAME", kScreenCenter, 82);
+    M5.Display.drawString("BLUETOOTH DEVICE", kScreenCenter, 72);
 
     M5.Display.fillCircle(kSettingsCloseX, kSettingsCloseY, kSettingsCloseRadius, panel);
     drawThickCircle(kSettingsCloseX, kSettingsCloseY, kSettingsCloseRadius, 3, panelBorder);
@@ -1220,41 +1305,80 @@ void renderSettingsUi() {
     M5.Display.drawWideLine(kSettingsCloseX + 10, kSettingsCloseY - 10, kSettingsCloseX - 10,
                             kSettingsCloseY + 10, 2.5f, TFT_WHITE);
 
-    M5.Display.setFont(&fonts::DejaVu24);
+    M5.Display.setFont(&fonts::DejaVu18);
+    M5.Display.setTextSize(1);
     for (int i = 0; i < 3; ++i) {
         const int slot = i + 1;
         const int x = 122 + i * 111;
         const bool selected = slot == g_pendingDeviceSlot;
-        M5.Display.fillCircle(x, 150, 46, selected ? purple : panel);
-        drawThickCircle(x, 150, 46, selected ? 5 : 3, selected ? TFT_WHITE : panelBorder);
+        M5.Display.fillCircle(x, 112, 30, selected ? purple : panel);
+        drawThickCircle(x, 112, 30, selected ? 4 : 2, selected ? TFT_WHITE : panelBorder);
         M5.Display.setTextColor(TFT_WHITE, selected ? purple : panel);
         char label[4];
         std::snprintf(label, sizeof(label), "#%d", slot);
-        M5.Display.drawString(label, x, 150);
+        M5.Display.drawString(label, x, 112);
     }
 
     const bool pairPressed = g_activeTouch == kTouchPair;
     const auto pairFill = pairPressed ? M5.Display.color565(103, 81, 220) : purple;
-    M5.Display.fillRoundRect(113, 215, 240, 76, 38, pairFill);
-    drawThickRoundRect(113, 215, 240, 76, 38, pairPressed ? 6 : 4,
+    M5.Display.fillRoundRect(153, 151, 160, 45, 22, pairFill);
+    drawThickRoundRect(153, 151, 160, 45, 22, pairPressed ? 5 : 3,
                        pairPressed ? TFT_WHITE : panelBorder);
     M5.Display.setTextColor(TFT_WHITE, pairFill);
-    M5.Display.drawString("PAIR", kScreenCenter, 253);
+    M5.Display.drawString("PAIR", kScreenCenter, 173);
 
     M5.Display.setFont(&fonts::DejaVu18);
+    M5.Display.setTextSize(0.82f);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     char volumeLabel[24];
     std::snprintf(volumeLabel, sizeof(volumeLabel), "SE VOLUME  %u%%",
                   static_cast<unsigned>(g_seVolume) * 100 / 255);
-    M5.Display.drawString(volumeLabel, kScreenCenter, 326);
+    M5.Display.drawString(volumeLabel, kScreenCenter, 216);
 
-    const int volumeX = 103 + static_cast<int>(g_seVolume) * 260 / 255;
-    M5.Display.drawWideLine(103, 368, 363, 368, 7.0f, panelBorder);
-    if (volumeX > 103) {
-        M5.Display.drawWideLine(103, 368, volumeX, 368, 7.0f, purple);
+    const int volumeX = kSettingsSliderLeft + static_cast<int>(g_seVolume) *
+                        (kSettingsSliderRight - kSettingsSliderLeft) / 255;
+    M5.Display.drawWideLine(kSettingsSliderLeft, 242, kSettingsSliderRight, 242,
+                            6.0f, panelBorder);
+    if (volumeX > kSettingsSliderLeft) {
+        M5.Display.drawWideLine(kSettingsSliderLeft, 242, volumeX, 242, 6.0f, purple);
     }
-    M5.Display.fillCircle(volumeX, 368, 15, TFT_WHITE);
-    drawThickCircle(volumeX, 368, 15, 3, purple);
+    M5.Display.fillCircle(volumeX, 242, 12, TFT_WHITE);
+    drawThickCircle(volumeX, 242, 12, 2, purple);
+
+    char vibrationLabel[32];
+    std::snprintf(vibrationLabel, sizeof(vibrationLabel), "VIBE STRENGTH  %u%%",
+                  static_cast<unsigned>(g_vibrationStrength) * 100 / 255);
+    M5.Display.drawString(vibrationLabel, kScreenCenter, 278);
+
+    const int vibrationX = kSettingsSliderLeft + static_cast<int>(g_vibrationStrength) *
+                           (kSettingsSliderRight - kSettingsSliderLeft) / 255;
+    M5.Display.drawWideLine(kSettingsSliderLeft, 304, kSettingsSliderRight, 304,
+                            6.0f, panelBorder);
+    if (vibrationX > kSettingsSliderLeft) {
+        M5.Display.drawWideLine(kSettingsSliderLeft, 304, vibrationX, 304, 6.0f, purple);
+    }
+    M5.Display.fillCircle(vibrationX, 304, 12, TFT_WHITE);
+    drawThickCircle(vibrationX, 304, 12, 2, purple);
+
+    M5.Display.setTextSize(0.72f);
+    M5.Display.setTextColor(muted, TFT_BLACK);
+    M5.Display.drawString("AGENT 1-6 STATE CHANGE", kScreenCenter, 341);
+
+    const auto drawCheckbox = [&](int x, const char* label, bool checked) {
+        const auto fill = checked ? purple : panel;
+        M5.Display.fillRoundRect(x, 367, 28, 28, 6, fill);
+        drawThickRoundRect(x, 367, 28, 28, 6, 2, checked ? TFT_WHITE : panelBorder);
+        if (checked) {
+            M5.Display.drawWideLine(x + 6, 381, x + 12, 387, 3.0f, TFT_WHITE);
+            M5.Display.drawWideLine(x + 12, 387, x + 23, 375, 3.0f, TFT_WHITE);
+        }
+        M5.Display.setTextDatum(middle_left);
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Display.drawString(label, x + 38, 381);
+        M5.Display.setTextDatum(middle_center);
+    };
+    drawCheckbox(103, "SE", g_agentStateSeEnabled);
+    drawCheckbox(245, "VIBE", g_agentStateVibeEnabled);
 
     drawStatusBar();
 }
@@ -1264,7 +1388,6 @@ void renderUi(std::uint32_t now) {
     // full-frame painting avoids stale pixels when switching between layers.
     M5.Display.startWrite();
     M5.Display.fillScreen(TFT_BLACK);
-    drawAmbient(now);
 
     if (g_settingsOpen) {
         renderSettingsUi();
@@ -1391,6 +1514,78 @@ void renderUi(std::uint32_t now) {
     g_lastUiDraw = now;
 }
 
+// Draw one frame of the boot animation. The six orbiting dots preview the
+// Agent-layer layout before the full interface appears.
+void drawSplashFrame(float progress) {
+    const float eased = 1.0f - std::pow(1.0f - clamp01(progress), 3.0f);
+    const float textFade = clamp01(progress / 0.38f);
+    const float pulse = 0.78f + 0.22f * std::sin(progress * PI * 4.0f);
+    const auto purple = scaledColor(0x9D74FF, textFade);
+    const auto cyan = scaledColor(0x33C4E8, textFade);
+    const auto muted = scaledColor(0xAAB4C8, textFade * 0.85f);
+
+    M5.Display.startWrite();
+    M5.Display.fillScreen(TFT_BLACK);
+
+    // Expand the primary logo ring from the center.
+    const int ringRadius = 72 + static_cast<int>(56.0f * eased);
+    drawThickCircle(kScreenCenter, kScreenCenter, ringRadius + 8, 2,
+                    scaledColor(0x34284F, textFade));
+    drawThickCircle(kScreenCenter, kScreenCenter, ringRadius, 4,
+                    scaledColor(0x9D74FF, textFade * pulse));
+    // Reveal six status dots clockwise, mirroring the main Agent layer.
+    for (int i = 0; i < kAgentCount; ++i) {
+        const float revealAt = 0.10f + i * 0.075f;
+        if (progress < revealAt) {
+            continue;
+        }
+        const float dotFade = clamp01((progress - revealAt) / 0.18f);
+        const float angle = (-120.0f + i * 60.0f) * PI / 180.0f;
+        const int x = kScreenCenter + static_cast<int>(std::cos(angle) * 166.0f);
+        const int y = kScreenCenter + static_cast<int>(std::sin(angle) * 166.0f);
+        M5.Display.fillCircle(x, y, 5 + static_cast<int>(3.0f * dotFade),
+                              scaledColor(i % 2 == 0 ? 0x9D74FF : 0x33C4E8, dotFade));
+    }
+
+    // The Orbitron face matches the technical visual language of the main UI.
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setFont(&fonts::Orbitron_Light_32);
+    M5.Display.setTextSize(0.92f);
+    M5.Display.setTextColor(purple, TFT_BLACK);
+    M5.Display.drawString("VIBEWATCH", kScreenCenter, 205);
+
+    M5.Display.setFont(&fonts::Orbitron_Light_24);
+    M5.Display.setTextSize(0.48f);
+    M5.Display.setTextColor(cyan, TFT_BLACK);
+    M5.Display.drawString("AI CONTROL SURFACE", kScreenCenter, 247);
+
+    M5.Display.setTextSize(0.52f);
+    M5.Display.setTextColor(muted, TFT_BLACK);
+    M5.Display.drawString(vibe::kFirmwareVersion, kScreenCenter, 286);
+
+    // A small center mark gives the logo a watch-dial focal point.
+    M5.Display.fillCircle(kScreenCenter, 151, 4, cyan);
+    M5.Display.drawWideLine(kScreenCenter - 13, 151, kScreenCenter - 6, 151, 2.0f, purple);
+    M5.Display.drawWideLine(kScreenCenter + 6, 151, kScreenCenter + 13, 151, 2.0f, purple);
+
+    M5.Display.endWrite();
+}
+
+void showSplashScreen() {
+    constexpr std::uint32_t kSplashAnimationMs = 1250;
+    constexpr std::uint32_t kSplashHoldMs = 350;
+    const std::uint32_t startedAt = millis();
+
+    while (millis() - startedAt < kSplashAnimationMs) {
+        const float progress = static_cast<float>(millis() - startedAt) /
+                               static_cast<float>(kSplashAnimationMs);
+        drawSplashFrame(progress);
+        delay(24);
+    }
+    drawSplashFrame(1.0f);
+    delay(kSplashHoldMs);
+}
+
 }  // namespace
 
 // -----------------------------------------------------------------------------
@@ -1410,7 +1605,9 @@ void setup() {
     M5.Display.setBrightness(80);
     M5.Display.setRotation(0);
 
-    loadDeviceSlot();
+    showSplashScreen();
+
+    loadPreferences();
     M5.Speaker.setVolume(g_seVolume);
     initializeAgentPositions();
     g_rpcQueue = xQueueCreate(6, sizeof(char*));
@@ -1438,6 +1635,12 @@ void loop() {
         processRpc(message);
         std::free(message);
         message = nullptr;
+    }
+
+    if (g_pairingSuccessPending) {
+        g_pairingSuccessPending = false;
+        playSe(1320.0f, 95);
+        vibrate(220, 75);
     }
 
     const std::uint32_t now = millis();
