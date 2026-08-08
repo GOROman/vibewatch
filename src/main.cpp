@@ -4,6 +4,7 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <Preferences.h>
+#include <esp_system.h>
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,8 @@ namespace {
 // around the physical center so the layout visually follows the round bezel.
 constexpr int kAgentCount = 6;
 constexpr int kActionCount = 5;
+constexpr int kOkAction = 1;
+constexpr int kNgAction = 2;
 constexpr int kScreenCenter = 233;
 constexpr int kAgentOrbitRadius = 160;
 constexpr int kAgentButtonRadius = 55;
@@ -637,7 +640,7 @@ void initializeAgentPositions() {
     }
     // FAST, OK, NG, PLAN, AI. OK/NG sit directly below the left/right
     // physical buttons; the other three follow the lower circular edge.
-    actionX = {70, 112, 354, 233, 396};
+    actionX = {70, 354, 112, 233, 396};
     actionY = {250, 105, 105, 368, 250};
     g_selectionX = static_cast<float>(agentX[g_selectedAgent]);
     g_selectionY = static_cast<float>(agentY[g_selectedAgent]);
@@ -918,7 +921,7 @@ void handlePhysicalButtons() {
         }
         g_rightPhysicalPressedAt = 0;
         if (g_rightActionPressed) {
-            sendOuterActionEvent(2, false);
+            sendOuterActionEvent(kOkAction, false);
             g_rightActionPressed = false;
         }
         g_leftPressPending = false;
@@ -956,8 +959,8 @@ void handlePhysicalButtons() {
         g_leftPressPending = false;
         g_leftPressedActionLayer = g_actionLayer;
         if (g_actionLayer) {
-            g_selectedAction = 1;
-            g_leftAgentPressed = 1;
+            g_selectedAction = kNgAction;
+            g_leftAgentPressed = kNgAction;
             sendOuterActionEvent(g_leftAgentPressed, true);
             playOuterActionPressSe(g_leftAgentPressed);
         } else {
@@ -976,8 +979,8 @@ void handlePhysicalButtons() {
             g_leftPressPending = false;
             g_leftPressedActionLayer = g_actionLayer;
             if (g_actionLayer) {
-                g_selectedAction = 1;
-                g_leftAgentPressed = 1;
+                g_selectedAction = kNgAction;
+                g_leftAgentPressed = kNgAction;
                 sendOuterActionEvent(g_leftAgentPressed, true);
                 playOuterActionPressSe(g_leftAgentPressed);
             } else {
@@ -1010,23 +1013,23 @@ void handlePhysicalButtons() {
         millis() - g_rightActionPressedAt >= kButtonChordGraceMs) {
         g_rightActionPending = false;
         g_rightActionPressed = true;
-        g_selectedAction = 2;
-        sendOuterActionEvent(2, true);
-        playOuterActionPressSe(2);
+        g_selectedAction = kOkAction;
+        sendOuterActionEvent(kOkAction, true);
+        playOuterActionPressSe(kOkAction);
         vibrate();
         g_uiDirty = true;
     }
     if (g_actionLayer && M5.BtnB.wasReleased()) {
         if (g_rightActionPending) {
             g_rightActionPending = false;
-            g_selectedAction = 2;
-            sendOuterActionEvent(2, true);
-            playOuterActionPressSe(2);
+            g_selectedAction = kOkAction;
+            sendOuterActionEvent(kOkAction, true);
+            playOuterActionPressSe(kOkAction);
             delay(12);
-            sendOuterActionEvent(2, false);
+            sendOuterActionEvent(kOkAction, false);
             vibrate();
         } else if (g_rightActionPressed) {
-            sendOuterActionEvent(2, false);
+            sendOuterActionEvent(kOkAction, false);
             g_rightActionPressed = false;
         }
         g_uiDirty = true;
@@ -1179,8 +1182,8 @@ void drawAssistantGlyph(int x, int y, std::uint16_t color) {
 void drawPhysicalActionLinks() {
     // Colored rails enter from the real button positions at the top edge and
     // terminate under the OK/NG circles. Pressing either side lights its rail.
-    const bool leftActive = g_leftAgentPressed == 1 || g_activeTouch == 1;
-    const bool rightActive = g_rightActionPressed || g_activeTouch == 2;
+    const bool leftActive = g_leftAgentPressed == kNgAction || g_activeTouch == kNgAction;
+    const bool rightActive = g_rightActionPressed || g_activeTouch == kOkAction;
     const auto leftColor = scaledColor(kLeftPhysicalButtonColor, 1.0f);
     const auto rightColor = scaledColor(kRightPhysicalButtonColor, 1.0f);
     const auto leftGlow = scaledColor(kLeftPhysicalButtonColor, leftActive ? 0.58f : 0.24f);
@@ -1396,7 +1399,7 @@ void renderUi(std::uint32_t now) {
         bool selected = false;
         if (g_actionLayer) {
             static constexpr std::uint32_t kActionColors[kActionCount] = {
-                0x9D74FF, kLeftPhysicalButtonColor, kRightPhysicalButtonColor,
+                0x9D74FF, kRightPhysicalButtonColor, kLeftPhysicalButtonColor,
                 0x33C4E8, 0xE5E8EF,
             };
             accent = scaledColor(kActionColors[i], 1.0f);
@@ -1413,7 +1416,7 @@ void renderUi(std::uint32_t now) {
             accent = M5.Display.color565(163, 132, 255);
         }
         const bool pressed = g_activeTouch == i || g_leftAgentPressed == i ||
-                             (g_actionLayer && g_rightActionPressed && i == 2);
+                             (g_actionLayer && g_rightActionPressed && i == kOkAction);
         if (g_actionLayer && pressed) {
             fill = accent;
         }
@@ -1509,7 +1512,8 @@ void renderUi(std::uint32_t now) {
 // Agent-layer layout before the full interface appears.
 void drawSplashFrame(float progress) {
     const float eased = 1.0f - std::pow(1.0f - clamp01(progress), 3.0f);
-    const float textFade = clamp01(progress / 0.38f);
+    const float rawFade = clamp01(progress / 0.68f);
+    const float textFade = rawFade * rawFade * (3.0f - 2.0f * rawFade);
     const float pulse = 0.78f + 0.22f * std::sin(progress * PI * 4.0f);
     const auto purple = scaledColor(0x9D74FF, textFade);
     const auto cyan = scaledColor(0x33C4E8, textFade);
@@ -1554,6 +1558,33 @@ void drawSplashFrame(float progress) {
     M5.Display.setTextColor(muted, TFT_BLACK);
     M5.Display.drawString(vibe::kFirmwareVersion, kScreenCenter, 291);
 
+    // Animate from zero to the measured charge so the battery readout also
+    // acts as a compact startup progress indicator.
+    const int animatedBattery = static_cast<int>(
+        std::lround(static_cast<float>(g_batteryLevel) * eased));
+    const std::uint32_t batteryPacked = g_batteryLevel <= 15
+        ? 0xF55367
+        : g_batteryLevel <= 35 ? 0xFFAC28 : 0x33C4E8;
+    const auto batteryColor = scaledColor(batteryPacked, textFade);
+    const auto batteryTrack = scaledColor(0x566071, textFade * 0.55f);
+    constexpr int kBatteryBarX = 143;
+    constexpr int kBatteryBarY = 361;
+    constexpr int kBatteryBarWidth = 180;
+    constexpr int kBatteryBarHeight = 10;
+    const int batteryFillWidth = kBatteryBarWidth * animatedBattery / 100;
+
+    char batteryLabel[24];
+    std::snprintf(batteryLabel, sizeof(batteryLabel), "BATTERY  %d%%", animatedBattery);
+    M5.Display.setTextSize(0.58f);
+    M5.Display.setTextColor(batteryColor, TFT_BLACK);
+    M5.Display.drawString(batteryLabel, kScreenCenter, 338);
+    M5.Display.fillRoundRect(kBatteryBarX, kBatteryBarY, kBatteryBarWidth,
+                             kBatteryBarHeight, kBatteryBarHeight / 2, batteryTrack);
+    if (batteryFillWidth > 0) {
+        M5.Display.fillRoundRect(kBatteryBarX, kBatteryBarY, batteryFillWidth,
+                                 kBatteryBarHeight, kBatteryBarHeight / 2, batteryColor);
+    }
+
     // A small center mark gives the logo a watch-dial focal point.
     M5.Display.fillCircle(kScreenCenter, 151, 4, cyan);
     M5.Display.drawWideLine(kScreenCenter - 13, 151, kScreenCenter - 6, 151, 2.0f, purple);
@@ -1563,16 +1594,24 @@ void drawSplashFrame(float progress) {
 }
 
 void showSplashScreen() {
-    constexpr std::uint32_t kSplashAnimationMs = 1250;
-    constexpr std::uint32_t kSplashHoldMs = 350;
+    constexpr std::uint32_t kSplashAnimationMs = 1800;
+    constexpr std::uint32_t kSplashHoldMs = 1100;
+    constexpr std::uint32_t kPicoIntervalMs = 100;
 
-    // Let the first logo frame appear before the short rising startup jingle.
-    drawSplashFrame(0.16f);
-    sound::playEffect(sound::Effect::Start, g_seVolume, 2);
+    drawSplashFrame(0.0f);
+    std::srand(esp_random());
     const std::uint32_t startedAt = millis();
+    std::uint32_t nextPicoAt = 0;
 
     while (millis() - startedAt < kSplashAnimationMs) {
-        const float progress = static_cast<float>(millis() - startedAt) /
+        const std::uint32_t elapsed = millis() - startedAt;
+        if (elapsed >= nextPicoAt) {
+            // Match LLMCardputer's random sample-and-hold startup sound.
+            const int frequency = 400 + std::rand() % 800;
+            sound::playTriangle(static_cast<float>(frequency), 80, g_seVolume);
+            nextPicoAt += kPicoIntervalMs;
+        }
+        const float progress = static_cast<float>(elapsed) /
                                static_cast<float>(kSplashAnimationMs);
         drawSplashFrame(progress);
         delay(24);
@@ -1602,6 +1641,7 @@ void setup() {
 
     loadPreferences();
     M5.Speaker.setVolume(g_seVolume);
+    updateBattery(false);
     showSplashScreen();
 
     initializeAgentPositions();
