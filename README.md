@@ -23,7 +23,7 @@ The final Hackster page will include device photos and a short video showing:
 
 ## Functionality and Execution
 
-The working prototype handles an animated Vibe Watch startup, Bluetooth pairing with success feedback, six live agent states, animated selection, layer switching, action controls, push-to-talk, sound, vibration, and battery reporting. The firmware builds reproducibly with PlatformIO on the ESP32-S3-based StopWatch.
+The working prototype handles an animated Vibe Watch startup with a short jingle, Bluetooth pairing with success feedback, six live agent states, animated selection, layer switching, action controls, push-to-talk, sound, vibration, and battery reporting. The firmware builds reproducibly with PlatformIO on the ESP32-S3-based StopWatch.
 
 ## Creativity and Originality
 
