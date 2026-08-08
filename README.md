@@ -1,5 +1,7 @@
 # Vibe Watch
 
+**English** | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
+
 [![Firmware build](https://github.com/GOROman/vibewatch/actions/workflows/firmware.yml/badge.svg)](https://github.com/GOROman/vibewatch/actions/workflows/firmware.yml)
 
 **A wearable, tactile control surface for AI-assisted Vibe Coding—built around the M5Stack StopWatch.**
