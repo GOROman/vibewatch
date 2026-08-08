@@ -23,7 +23,7 @@ The final Hackster page will include device photos and a short video showing:
 
 ## Functionality and Execution
 
-The working prototype handles Bluetooth pairing, six live agent states, animated selection, layer switching, action controls, push-to-talk, sound, vibration, and battery reporting. The firmware builds reproducibly with PlatformIO on the ESP32-S3-based StopWatch.
+The working prototype handles an animated Vibe Watch startup, Bluetooth pairing with success feedback, six live agent states, animated selection, layer switching, action controls, push-to-talk, sound, vibration, and battery reporting. The firmware builds reproducibly with PlatformIO on the ESP32-S3-based StopWatch.
 
 ## Creativity and Originality
 
@@ -37,7 +37,7 @@ Press both physical buttons together and the ring transforms into **FAST, OK, NG
 
 ## Multisensory Feedback
 
-Every important action combines **visual** color and motion, **audio** confirmation, and **haptic** feedback. The result feels immediate and physical rather than like another remote screen.
+Every important action combines **visual** color and motion, **audio** confirmation, and **haptic** feedback. In Settings, users can adjust vibration strength and independently enable sound or vibration when any of the six agent states changes. The result feels immediate and physical rather than like another remote screen.
 
 ## Impact and Usefulness
 
