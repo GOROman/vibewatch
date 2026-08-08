@@ -24,8 +24,6 @@ After purchasing an [OpenAI Codex Micro](https://learn.chatgpt.com/docs/features
 
 ## The Experience
 
-On power-up, Vibe Watch fades into an animated identity, plays an original NES-style chiptune, and grows a progress bar to the measured battery level.
-
 The main **Agent layer** arranges six live agent indicators around the circular screen. Host-provided color, brightness, and animation communicate activity, while a fast spring motion moves the selection ring from one agent to the next.
 
 Pressing both hardware buttons transforms the interface into the **Action layer**:

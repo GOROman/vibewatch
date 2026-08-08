@@ -24,8 +24,6 @@ Vibe Codingでは、複数のAIエージェントセッションを同時並行�
 
 ## 体験
 
-起動するとVibe Watchのロゴがフェードインし、オリジナルのNES風チップチューンが鳴り、実測したバッテリー残量までプログレスバーが伸びます。
-
 メインの**エージェントレイヤー**では、円形画面の周囲に6つのエージェントを配置します。ホストから受け取った色、明るさ、アニメーションで状態を伝え、素早いスプリングモーションで選択リングが次のエージェントへ移動します。
 
 2つの物理ボタンを同時に押すと、UIが**アクションレイヤー**へ変形します。
@@ -132,4 +130,3 @@ Vibe WatchでSettingsを開き、3つのデバイススロットから1つを選
 - [M5Stack StopWatch — 公式ドキュメント](https://docs.m5stack.com/en/core/StopWatch)
 - [M5Stack Watch Accessory Kit for M5Stick Series — 公式製品ページ](https://shop.m5stack.com/products/watch-accessory-kit-for-m5stick-series)
 - [OpenAI Codex Micro — 公式ドキュメント](https://learn.chatgpt.com/docs/features/codex-micro)
-
