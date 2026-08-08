@@ -2,50 +2,46 @@
 
 **A tactile companion for AI-assisted Vibe Coding, built with the M5Stack StopWatch.**
 
+## Description
+
 Vibe Watch moves frequent AI-agent controls from the computer screen to a small wireless device. Select an agent, approve or reject an action, invoke the assistant, or use push-to-talk without leaving the creative flow.
 
 ## Why Vibe Watch?
 
 Vibe Coding feels best when ideas, code, and feedback move continuously. Searching for small on-screen controls breaks that rhythm.
 
-Vibe Watch keeps the essential interactions within reach:
+After purchasing an OpenAI Codex Micro, I was inspired by dedicated hardware for AI coding. I believed a round touchscreen, direct controls, animation, sound, and haptics could create an even more compact and glanceable experience. That challenge became Vibe Watch: a small “AI cockpit” for the desk.
 
-- **Glance** at the state of six AI agents.
-- **Tap** an agent or action directly.
-- **Speak** through a large push-to-talk button.
-- **Feel and hear** immediate confirmation.
+## Demo
 
-It is a compact “AI cockpit” for the desk.
+The final Hackster page will include device photos and a short video showing:
 
-## Circular UI
+- Live agent colors and the animated selection ring
+- Switching between Agent and Action layers
+- One-touch approval and rejection
+- Push-to-talk with visual, sound, and haptic feedback
 
-The interface was designed around the round M5Stack StopWatch display instead of adapting a rectangular desktop layout.
+## Functionality and Execution
 
-Six agent buttons orbit the center microphone. An animated ring travels around the dial to show the current selection, while live colors make every agent easy to recognize at a glance.
+The working prototype handles Bluetooth pairing, six live agent states, animated selection, layer switching, action controls, push-to-talk, sound, vibration, and battery reporting. The firmware builds reproducibly with PlatformIO on the ESP32-S3-based StopWatch.
 
-The microphone remains large and central because voice is the quickest way to add context while coding.
+## Creativity and Originality
+
+Unlike a conventional macro pad, Vibe Watch uses the entire M5Stack StopWatch as a multisensory AI interface. Six agent buttons orbit a large center microphone, while live colors and an animated ring make state and selection easy to recognize at a glance.
 
 ## Two Interaction Layers
 
-### Agent Layer
+The Agent layer displays agents 1–6. Tap one to select it, or use the left physical button to move through them.
 
-The outer ring displays agents 1–6. Tap an agent to select it, or use the left physical button to move through agents without touching the screen.
-
-### Action Layer
-
-Press both physical buttons together and the outer ring transforms into **FAST, OK, NG, SPLIT, and AI**.
-
-The physical buttons sit directly above OK and NG, creating a simple spatial relationship: left approves, right rejects. Common decisions can be made without looking away from the code.
+Press both physical buttons together and the ring transforms into **FAST, OK, NG, SPLIT, and AI**. The buttons sit directly above OK and NG, creating a simple spatial relationship: left approves, right rejects.
 
 ## Multisensory Feedback
 
-Every important action combines three forms of feedback:
+Every important action combines **visual** color and motion, **audio** confirmation, and **haptic** feedback. The result feels immediate and physical rather than like another remote screen.
 
-- **Visual** — color, motion, selection rings, and clear layer changes
-- **Audio** — short sounds confirm presses and push-to-talk state
-- **Haptic** — vibration confirms input without requiring another glance
+## Impact and Usefulness
 
-The result feels immediate and physical rather than like another remote screen.
+Vibe Watch reduces small but repeated interruptions during AI-assisted coding. It keeps status visible, makes approval decisions nearly instant, and lets voice input happen without searching through the desktop UI. The same interaction model could inspire accessible controllers for other multi-agent and creative tools.
 
 ## Key Controls
 
@@ -57,12 +53,33 @@ The result feels immediate and physical rather than like another remote screen.
 | Press left / right in Action layer | Approve / reject |
 | Hold the center microphone | Push-to-talk |
 
-## Hardware and Build
+## Hardware Used
 
-Vibe Watch uses one [M5Stack StopWatch](https://docs.m5stack.com/en/core/StopWatch). No additional sensor, module, or custom PCB is required.
+| Item | Quantity | Role |
+|---|---:|---|
+| [M5Stack StopWatch](https://docs.m5stack.com/en/core/StopWatch) | 1 | Main controller and complete user interface |
+| USB-C cable | 1 | Firmware upload and charging |
+| macOS computer with Bluetooth | 1 | AI coding host |
+
+No additional sensor, module, or custom PCB is required.
+
+## How the M5Stack Controller Is Used
+
+The M5Stack StopWatch is the heart of the project—not a passive display or accessory. Its ESP32-S3 runs the firmware and wireless connection. The round touchscreen presents six agents and the action layer; the physical buttons provide eyes-free shortcuts; the speaker and vibration motor confirm input; and the battery makes the experience portable.
+
+All interaction happens directly on the StopWatch, turning the controller into a self-contained physical interface for Vibe Coding.
+
+## Build Instructions
+
+Install PlatformIO Core, clone this repository, and build the firmware:
 
 ```sh
 python3 -m platformio run
+```
+
+Connect the M5Stack StopWatch over USB-C and upload it:
+
+```sh
 python3 -m platformio run --target upload
 ```
 
@@ -72,6 +89,10 @@ After flashing, open the device settings, tap **PAIR**, and connect to `Vibe Wat
 
 [MIT License](LICENSE)
 
+## References
+
+- [OpenAI Codex Micro — official documentation](https://learn.chatgpt.com/docs/features/codex-micro)
+
 ## Disclaimer
 
-This is an independent experimental compatibility project. Third-party manufacturer and model names are intentionally shown as `**********`. It is not official M5Stack firmware.
+This is an independent experimental compatibility project inspired by OpenAI Codex Micro. Third-party manufacturer and model values in the firmware are intentionally shown as `**********`. It is not official firmware from OpenAI or M5Stack.
