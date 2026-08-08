@@ -50,7 +50,6 @@ constexpr char kPreferencesNamespace[] = "vibe-watch";
 constexpr char kDeviceSlotKey[] = "device-slot";
 constexpr char kSeVolumeKey[] = "se-volume";
 constexpr char kVibrationStrengthKey[] = "vibe-strength";
-constexpr char kAgentStateSeKey[] = "state-se";
 constexpr char kAgentStateVibeKey[] = "state-vibe";
 
 // Hit-test results share one integer space. Non-negative values below
@@ -65,8 +64,7 @@ constexpr int kTouchSlot3 = kAgentCount + 5;
 constexpr int kTouchPair = kAgentCount + 6;
 constexpr int kTouchVolume = kAgentCount + 7;
 constexpr int kTouchVibrationStrength = kAgentCount + 8;
-constexpr int kTouchAgentStateSe = kAgentCount + 9;
-constexpr int kTouchAgentStateVibe = kAgentCount + 10;
+constexpr int kTouchAgentStateVibe = kAgentCount + 9;
 
 struct AgentState {
     std::uint32_t color = 0;
@@ -119,6 +117,7 @@ int g_deviceSlot = 1;
 int g_pendingDeviceSlot = 1;
 int g_selectedAgent = 0;
 int g_selectedAction = 0;
+bool g_planModeEnabled = false;
 float g_selectionX = 0.0f;
 float g_selectionY = 0.0f;
 float g_selectionFromX = 0.0f;
@@ -146,9 +145,8 @@ std::uint32_t g_restartAt = 0;
 char g_deviceName[24] = {};
 std::uint8_t g_seVolume = 128;
 std::uint8_t g_vibrationStrength = 255;
-bool g_agentStateSeEnabled = true;
 bool g_agentStateVibeEnabled = true;
-std::uint32_t g_lastAgentFeedbackAt = 0;
+std::uint32_t g_lastAgentVibrationAt = 0;
 
 std::array<int, kAgentCount> agentX{};
 std::array<int, kAgentCount> agentY{};
@@ -165,7 +163,6 @@ void loadPreferences() {
     g_deviceSlot = preferences.getUChar(kDeviceSlotKey, 1);
     g_seVolume = preferences.getUChar(kSeVolumeKey, 128);
     g_vibrationStrength = preferences.getUChar(kVibrationStrengthKey, 255);
-    g_agentStateSeEnabled = preferences.getBool(kAgentStateSeKey, true);
     g_agentStateVibeEnabled = preferences.getBool(kAgentStateVibeKey, true);
     preferences.end();
     if (g_deviceSlot < 1 || g_deviceSlot > 3) {
@@ -193,7 +190,6 @@ void saveFeedbackSettings() {
     Preferences preferences;
     preferences.begin(kPreferencesNamespace, false);
     preferences.putUChar(kVibrationStrengthKey, g_vibrationStrength);
-    preferences.putBool(kAgentStateSeKey, g_agentStateSeEnabled);
     preferences.putBool(kAgentStateVibeKey, g_agentStateVibeEnabled);
     preferences.end();
 }
@@ -354,7 +350,7 @@ void applyAgentStatus(JsonVariantConst params) {
     if (!params.is<JsonArrayConst>()) {
         return;
     }
-    int firstChangedAgent = -1;
+    bool anyAgentChanged = false;
     for (JsonObjectConst item : params.as<JsonArrayConst>()) {
         const int id = item["id"] | -1;
         if (id < 0 || id >= kAgentCount) {
@@ -370,23 +366,17 @@ void applyAgentStatus(JsonVariantConst params) {
                              std::abs(state.brightness - next.brightness) > 0.001f ||
                              state.effect != next.effect ||
                              std::abs(state.speed - next.speed) > 0.001f;
-        if (changed && firstChangedAgent < 0) {
-            firstChangedAgent = id;
-        }
+        anyAgentChanged = anyAgentChanged || changed;
         state = next;
     }
 
-    // A single compact cue represents one host update even when several
-    // agents change together. Throttling prevents rapid updates from stacking.
+    // Agent-state changes use haptics only. One compact cue represents a host
+    // update even when several agents change together, with rapid updates throttled.
     const std::uint32_t now = millis();
-    if (firstChangedAgent >= 0 && now - g_lastAgentFeedbackAt >= 120) {
-        if (g_agentStateSeEnabled) {
-            playSe(680.0f + firstChangedAgent * 70.0f, 50);
-        }
-        if (g_agentStateVibeEnabled) {
-            vibrate(190, 42);
-        }
-        g_lastAgentFeedbackAt = now;
+    if (anyAgentChanged && g_agentStateVibeEnabled &&
+        now - g_lastAgentVibrationAt >= 120) {
+        vibrate(190, 42);
+        g_lastAgentVibrationAt = now;
     }
     g_uiDirty = true;
 }
@@ -645,7 +635,7 @@ void initializeAgentPositions() {
         agentX[i] = kScreenCenter + static_cast<int>(std::cos(angle) * kAgentOrbitRadius);
         agentY[i] = kScreenCenter + static_cast<int>(std::sin(angle) * kAgentOrbitRadius);
     }
-    // FAST, OK, NG, SPLIT, AI. OK/NG sit directly below the left/right
+    // FAST, OK, NG, PLAN, AI. OK/NG sit directly below the left/right
     // physical buttons; the other three follow the lower circular edge.
     actionX = {70, 112, 354, 233, 396};
     actionY = {250, 105, 105, 368, 250};
@@ -748,10 +738,7 @@ int hitTestSettings(int x, int y) {
     if (pointInRect(x, y, 80, 267, 306, 55)) {
         return kTouchVibrationStrength;
     }
-    if (pointInRect(x, y, 70, 352, 145, 55)) {
-        return kTouchAgentStateSe;
-    }
-    if (pointInRect(x, y, 230, 352, 170, 55)) {
+    if (pointInRect(x, y, 145, 352, 180, 55)) {
         return kTouchAgentStateVibe;
     }
     return -1;
@@ -798,6 +785,10 @@ void updateVibrationStrengthFromTouch(int x) {
 }
 
 void sendOuterActionEvent(int index, bool pressed) {
+    if (index == 3 && pressed) {
+        g_planModeEnabled = !g_planModeEnabled;
+        g_uiDirty = true;
+    }
     sendActionEvent(index == 4 ? 12 : 6 + index, pressed);
 }
 
@@ -823,11 +814,6 @@ void handleSettingsTouch(const m5::Touch_Class::touch_detail_t& touch) {
             updateVolumeFromTouch(touch.x);
         } else if (g_activeTouch == kTouchVibrationStrength) {
             updateVibrationStrengthFromTouch(touch.x);
-        } else if (g_activeTouch == kTouchAgentStateSe) {
-            g_agentStateSeEnabled = !g_agentStateSeEnabled;
-            saveFeedbackSettings();
-            playSe(g_agentStateSeEnabled ? 1040.0f : 620.0f, 45);
-            vibrate(90, 20);
         } else if (g_activeTouch == kTouchAgentStateVibe) {
             g_agentStateVibeEnabled = !g_agentStateVibeEnabled;
             saveFeedbackSettings();
@@ -1221,25 +1207,18 @@ void drawFastGlyph(int x, int y, std::uint16_t color) {
 }
 
 void drawApproveGlyph(int x, int y, std::uint16_t color) {
-    drawThickCircle(x, y, 27, 3, color);
-    M5.Display.drawWideLine(x - 14, y, x - 4, y + 12, 5.0f, color);
-    M5.Display.drawWideLine(x - 4, y + 12, x + 17, y - 14, 5.0f, color);
+    M5.Display.drawWideLine(x - 19, y, x - 6, y + 15, 6.0f, color);
+    M5.Display.drawWideLine(x - 6, y + 15, x + 21, y - 18, 6.0f, color);
 }
 
 void drawRejectGlyph(int x, int y, std::uint16_t color) {
-    drawThickCircle(x, y, 27, 3, color);
-    M5.Display.drawWideLine(x - 13, y - 13, x + 13, y + 13, 5.0f, color);
-    M5.Display.drawWideLine(x + 13, y - 13, x - 13, y + 13, 5.0f, color);
+    M5.Display.drawWideLine(x - 18, y - 18, x + 18, y + 18, 6.0f, color);
+    M5.Display.drawWideLine(x + 18, y - 18, x - 18, y + 18, 6.0f, color);
 }
 
-void drawSplitGlyph(int x, int y, std::uint16_t color) {
-    M5.Display.drawWideLine(x - 22, y, x - 4, y, 4.0f, color);
-    M5.Display.drawWideLine(x - 4, y, x + 15, y - 18, 4.0f, color);
-    M5.Display.drawWideLine(x - 4, y, x + 15, y + 18, 4.0f, color);
-    M5.Display.drawWideLine(x + 15, y - 18, x + 15, y - 8, 4.0f, color);
-    M5.Display.drawWideLine(x + 15, y - 18, x + 5, y - 18, 4.0f, color);
-    M5.Display.drawWideLine(x + 15, y + 18, x + 15, y + 8, 4.0f, color);
-    M5.Display.drawWideLine(x + 15, y + 18, x + 5, y + 18, 4.0f, color);
+void drawPlanGlyph(int x, int y, std::uint16_t color, bool enabled) {
+    drawThickRoundRect(x - 29, y - 15, 58, 30, 15, 3, color);
+    M5.Display.fillCircle(x + (enabled ? 14 : -14), y, 9, color);
 }
 
 void drawSwipeChevron(int x, int y, bool pointsRight, std::uint16_t color) {
@@ -1263,7 +1242,7 @@ void drawCenterActionGlyph(int action, int x, int y, std::uint16_t color) {
             drawRejectGlyph(x, y - 5, color);
             break;
         default:
-            drawSplitGlyph(x, y - 5, color);
+            drawPlanGlyph(x, y - 5, color, g_planModeEnabled);
             break;
     }
 }
@@ -1383,8 +1362,7 @@ void renderSettingsUi() {
         M5.Display.drawString(label, x + 38, 381);
         M5.Display.setTextDatum(middle_center);
     };
-    drawCheckbox(103, "SE", g_agentStateSeEnabled);
-    drawCheckbox(245, "VIBE", g_agentStateVibeEnabled);
+    drawCheckbox(178, "VIBE", g_agentStateVibeEnabled);
 
     drawStatusBar();
 }
@@ -1422,7 +1400,7 @@ void renderUi(std::uint32_t now) {
                 0x33C4E8, 0xE5E8EF,
             };
             accent = scaledColor(kActionColors[i], 1.0f);
-            selected = g_selectedAction == i;
+            selected = i == 3 ? g_planModeEnabled : g_selectedAction == i;
         } else {
             const auto& state = g_agents[i];
             const float brightness = effectBrightness(state.effect, state.brightness, state.speed, now);
@@ -1467,12 +1445,12 @@ void renderUi(std::uint32_t now) {
             } else if (i == 2) {
                 drawRejectGlyph(outerX, glyphY, TFT_WHITE);
             } else if (i == 3) {
-                drawSplitGlyph(outerX, glyphY, TFT_WHITE);
+                drawPlanGlyph(outerX, glyphY, TFT_WHITE, g_planModeEnabled);
             } else {
                 drawAssistantGlyph(outerX, glyphY, TFT_WHITE);
             }
             static constexpr const char* kOuterActionLabels[kActionCount] = {
-                "FAST", "OK", "NG", "SPLIT", "AI",
+                "FAST", "OK", "NG", "PLAN", "AI",
             };
             M5.Display.setFont(&fonts::Orbitron_Light_24);
             M5.Display.setTextSize(0.62f);
