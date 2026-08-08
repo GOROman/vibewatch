@@ -10,6 +10,12 @@ Created for the [M5Stack Global Innovation Contest 2026](https://m5stack.com/glo
 
 ![Vibe Watch worn on the wrist, showing its tactile Vibe Coding action interface](docs/images/vibe-watch-hero.jpg)
 
+## Video Demo
+
+[![Watch the Vibe Watch video demo](https://img.youtube.com/vi/Wta_rQDcs74/maxresdefault.jpg)](https://www.youtube.com/watch?v=Wta_rQDcs74)
+
+[Watch on YouTube](https://www.youtube.com/watch?v=Wta_rQDcs74)
+
 ## One Glance. One Action. Stay in the Flow.
 
 Vibe Watch moves frequent AI-agent interactions away from crowded desktop UI and onto a dedicated wireless device. It keeps six agent states visible at a glance, makes approve/reject decisions physical, and puts Plan mode, assistant access, and push-to-talk on the wrist.

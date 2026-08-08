@@ -10,6 +10,12 @@
 
 ![佩戴在手腕上的Vibe Watch及其Vibe Coding操作界面](docs/images/vibe-watch-hero.jpg)
 
+## 演示视频
+
+[![观看Vibe Watch演示视频](https://img.youtube.com/vi/Wta_rQDcs74/maxresdefault.jpg)](https://www.youtube.com/watch?v=Wta_rQDcs74)
+
+[在YouTube上观看](https://www.youtube.com/watch?v=Wta_rQDcs74)
+
 ## 一眼掌握，一触操作，保持专注
 
 Vibe Watch将常用的AI智能体操作从拥挤的桌面界面转移到专用无线设备。它能让六个智能体的状态一目了然，将批准与拒绝变成实体操作，并把Plan模式、助手调用和按住说话功能放到手腕上。

@@ -8,6 +8,10 @@
 
 A wearable M5Stack controller for monitoring AI agents, approving actions, toggling Plan mode, and using push-to-talk.
 
+## Video Demo
+
+<https://www.youtube.com/watch?v=Wta_rQDcs74>
+
 ## Project Story
 
 ### Why I Built It

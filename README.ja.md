@@ -10,6 +10,12 @@
 
 ![手首に装着したVibe WatchとVibe Coding用アクション画面](docs/images/vibe-watch-hero.jpg)
 
+## デモ動画
+
+[![Vibe Watchのデモ動画を見る](https://img.youtube.com/vi/Wta_rQDcs74/maxresdefault.jpg)](https://www.youtube.com/watch?v=Wta_rQDcs74)
+
+[YouTubeで見る](https://www.youtube.com/watch?v=Wta_rQDcs74)
+
 ## ひと目で確認、ひと押しで操作、フローを止めない
 
 Vibe Watchは、頻繁に使うAIエージェント操作を混雑したデスクトップUIから専用ワイヤレスデバイスへ移します。6つのエージェント状態をひと目で把握し、承認・拒否を物理操作で判断でき、Planモード、AI呼び出し、Push-to-Talkを手首から利用できます。
