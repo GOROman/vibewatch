@@ -33,11 +33,11 @@ Unlike a conventional macro pad, Vibe Watch uses the entire M5Stack StopWatch as
 
 The Agent layer displays agents 1–6. Tap one to select it, or use the left physical button to move through them.
 
-Press both physical buttons together and the ring transforms into **FAST, OK, NG, SPLIT, and AI**. The buttons sit directly above OK and NG, creating a simple spatial relationship: left approves, right rejects.
+Press both physical buttons together and the ring transforms into **FAST, OK, NG, PLAN, and AI**. The PLAN control toggles Plan mode. The physical buttons connect visually to OK and NG: left approves, right rejects.
 
 ## Multisensory Feedback
 
-Every important action combines **visual** color and motion, **audio** confirmation, and **haptic** feedback. In Settings, users can adjust vibration strength and independently enable sound or vibration when any of the six agent states changes. The result feels immediate and physical rather than like another remote screen.
+Every important action combines **visual** color and motion, **audio** confirmation, and **haptic** feedback. In Settings, users can adjust vibration strength and enable or disable vibration when any of the six agent states changes. State changes stay silent, while direct user actions keep their concise audio confirmation. The result feels immediate and physical rather than like another remote screen.
 
 ## Impact and Usefulness
 
@@ -49,7 +49,8 @@ Vibe Watch reduces small but repeated interruptions during AI-assisted coding. I
 |---|---|
 | Tap 1–6 | Select an AI agent |
 | Press both physical buttons | Switch Agent / Action layers |
-| Tap FAST / OK / NG / SPLIT / AI | Trigger an action |
+| Tap FAST / OK / NG / AI | Trigger an action |
+| Tap PLAN | Toggle Plan mode |
 | Press left / right in Action layer | Approve / reject |
 | Hold the center microphone | Push-to-talk |
 
