@@ -23,7 +23,7 @@ The final Hackster page will include device photos and a short video showing:
 
 ## Functionality and Execution
 
-The working prototype handles an animated Vibe Watch startup with a short jingle, Bluetooth pairing with success feedback, six live agent states, animated selection, layer switching, action controls, push-to-talk, sound, vibration, and battery reporting. The firmware builds reproducibly with PlatformIO on the ESP32-S3-based StopWatch.
+The working prototype handles an animated Vibe Watch startup with a random sample-and-hold sound and battery progress bar, Bluetooth pairing with success feedback, six live agent states, animated selection, layer switching, action controls, push-to-talk, sound, vibration, and battery reporting. The firmware builds reproducibly with PlatformIO on the ESP32-S3-based StopWatch.
 
 ## Creativity and Originality
 
@@ -33,7 +33,7 @@ Unlike a conventional macro pad, Vibe Watch uses the entire M5Stack StopWatch as
 
 The Agent layer displays agents 1–6. Tap one to select it, or use the left physical button to move through them.
 
-Press both physical buttons together and the ring transforms into **FAST, OK, NG, PLAN, and AI**. The PLAN control toggles Plan mode. The physical buttons connect visually to OK and NG: left approves, right rejects.
+Press both physical buttons together and the ring transforms into **FAST, OK, NG, PLAN, and AI**. The PLAN control toggles Plan mode. The physical buttons connect visually to NG and OK: left rejects, right approves.
 
 ## Multisensory Feedback
 
@@ -51,7 +51,7 @@ Vibe Watch reduces small but repeated interruptions during AI-assisted coding. I
 | Press both physical buttons | Switch Agent / Action layers |
 | Tap FAST / OK / NG / AI | Trigger an action |
 | Tap PLAN | Toggle Plan mode |
-| Press left / right in Action layer | Approve / reject |
+| Press left / right in Action layer | Reject / approve |
 | Hold the center microphone | Push-to-talk |
 
 ## Hardware Used
