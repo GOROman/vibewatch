@@ -13,10 +13,16 @@
 #include <string>
 
 #include "vibe_hid.h"
-#include "llmcardputer_sound.h"
+#include "sound.h"
 
 namespace {
 
+// -----------------------------------------------------------------------------
+// UI geometry, timing, and persistent-setting keys
+// -----------------------------------------------------------------------------
+
+// The StopWatch display is 466 x 466 pixels. All primary controls are arranged
+// around the physical center so the layout visually follows the round bezel.
 constexpr int kAgentCount = 6;
 constexpr int kActionCount = 5;
 constexpr int kScreenCenter = 233;
@@ -40,6 +46,9 @@ constexpr char kPreferencesNamespace[] = "vibe-watch";
 constexpr char kDeviceSlotKey[] = "device-slot";
 constexpr char kSeVolumeKey[] = "se-volume";
 
+// Hit-test results share one integer space. Non-negative values below
+// kAgentCount are outer-ring items; the remaining values identify fixed UI
+// controls such as the microphone and settings widgets.
 constexpr int kTouchMic = kAgentCount;
 constexpr int kTouchSettings = kAgentCount + 1;
 constexpr int kTouchSettingsBack = kAgentCount + 2;
@@ -63,10 +72,19 @@ struct AmbientState {
     float speed = 0.4f;
 };
 
+// -----------------------------------------------------------------------------
+// Runtime state
+// -----------------------------------------------------------------------------
+
+// Visual state received from the host. Agent colors communicate per-chat state,
+// while the ambient state drives the thin animation around the display edge.
 std::array<AgentState, kAgentCount> g_agents;
 AmbientState g_ambient;
 String g_focusedApp;
 
+// BLE objects are created once during setup and remain valid for the lifetime
+// of the firmware. RPC messages are moved out of the BLE callback through a
+// FreeRTOS queue so JSON processing never blocks the NimBLE task.
 NimBLEServer* g_server = nullptr;
 NimBLEHIDDevice* g_hid = nullptr;
 NimBLECharacteristic* g_vendorInput = nullptr;
@@ -76,6 +94,9 @@ QueueHandle_t g_rpcQueue = nullptr;
 volatile bool g_connected = false;
 volatile bool g_uiDirty = true;
 String g_rxBuffer;
+
+// Input state is intentionally explicit because a physical-button press may
+// become a single action, a long press, or a two-button layer-switch chord.
 int g_activeTouch = -1;
 std::uint32_t g_vibrationOffAt = 0;
 std::uint32_t g_lastUiDraw = 0;
@@ -119,6 +140,10 @@ std::array<int, kAgentCount> agentY{};
 std::array<int, kActionCount> actionX{};
 std::array<int, kActionCount> actionY{};
 
+// -----------------------------------------------------------------------------
+// Preferences, sound, color, haptics, and battery helpers
+// -----------------------------------------------------------------------------
+
 void loadDeviceSlot() {
     Preferences preferences;
     preferences.begin(kPreferencesNamespace, true);
@@ -147,12 +172,12 @@ void saveSeVolume() {
 }
 
 void playSe(float frequency = 880.0f, std::uint32_t durationMs = 35) {
-    llmcardputer_sound::playSquare(frequency, durationMs, g_seVolume);
+    sound::playSquare(frequency, durationMs, g_seVolume);
 }
 
 void playMicSe(bool pressed, std::uint8_t tempoMultiplier = 1) {
-    llmcardputer_sound::playEffect(
-        pressed ? llmcardputer_sound::Effect::Start : llmcardputer_sound::Effect::StartReverse,
+    sound::playEffect(
+        pressed ? sound::Effect::Start : sound::Effect::StartReverse,
         g_seVolume, tempoMultiplier);
 }
 
@@ -216,6 +241,12 @@ void updateBattery(bool notify) {
     g_uiDirty = true;
 }
 
+// -----------------------------------------------------------------------------
+// Host communication
+// -----------------------------------------------------------------------------
+
+// Vendor JSON-RPC messages are split into fixed-size HID reports. Byte 0 is the
+// channel, byte 1 is the payload length, and bytes 2..62 contain UTF-8 JSON.
 void sendFramedJson(String payload, bool appendCrlf) {
     if (!g_connected || g_vendorInput == nullptr) {
         return;
@@ -289,6 +320,7 @@ void sendMicEvent(bool pressed) {
     sendActionEvent(11, pressed);
 }
 
+// Apply the host's compact agent-state array directly to the six ring buttons.
 void applyAgentStatus(JsonVariantConst params) {
     if (!params.is<JsonArrayConst>()) {
         return;
@@ -381,6 +413,8 @@ void processRpc(const char* json) {
     }
 }
 
+// BLE output callbacks run on NimBLE's task. This class only validates and
+// reassembles frames, then queues a complete JSON message for the main loop.
 class RpcOutputCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
         const NimBLEAttValue value = characteristic->getValue();
@@ -433,6 +467,8 @@ class RpcOutputCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+// Connection callbacks keep the UI synchronized with pairing state and resume
+// advertising automatically after a disconnect.
 class HidServerCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* server, NimBLEConnInfo& connection) override {
         g_connected = true;
@@ -466,6 +502,8 @@ void addDeviceInfoCharacteristic(std::uint16_t uuid, const char* value) {
 }
 
 void initializeBle() {
+    // Expose standard keyboard/consumer/pointer reports plus the vendor report
+    // used for agent status, actions, and request/response messages.
     NimBLEDevice::init(g_deviceName);
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
     NimBLEDevice::setSecurityAuth(true, false, true);
@@ -518,6 +556,8 @@ void initializeBle() {
 }
 
 void beginPairing() {
+    // A slot is a separate advertised identity. Clear every stored bond before
+    // restarting so macOS discovers the selected slot with a clean GATT cache.
     saveDeviceSlot(g_pendingDeviceSlot);
 
     if (g_server != nullptr) {
@@ -535,6 +575,10 @@ void beginPairing() {
     g_uiDirty = true;
     Serial.printf("Pairing requested for %s; restarting\n", g_deviceName);
 }
+
+// -----------------------------------------------------------------------------
+// Circular layout and agent-selection animation
+// -----------------------------------------------------------------------------
 
 void initializeAgentPositions() {
     for (int i = 0; i < kAgentCount; ++i) {
@@ -610,6 +654,10 @@ void selectAgent(int index) {
     g_selectedAgent = index;
     g_uiDirty = true;
 }
+
+// -----------------------------------------------------------------------------
+// Touch and physical-button input
+// -----------------------------------------------------------------------------
 
 bool pointInRect(int x, int y, int left, int top, int width, int height) {
     return x >= left && x < left + width && y >= top && y < top + height;
@@ -718,6 +766,8 @@ void handleTouch() {
 
     if (touch.wasPressed()) {
         g_activeTouch = hitTestMain(touch.x, touch.y);
+        // Remember the layer from touch-down through touch-up. A layer change
+        // during the gesture must not release a different host-side control.
         g_touchActionLayer = g_actionLayer;
         if (g_activeTouch >= 0 && g_activeTouch < kAgentCount) {
             if (g_touchActionLayer) {
@@ -763,7 +813,8 @@ void handleTouch() {
 
 void handlePhysicalButtons() {
     // Treat the two physical buttons as a chord before dispatching either
-    // single-button action. This toggles the six outer circles as one layer.
+    // single-button action. The short grace period prevents an Agent/OK/NG
+    // event from leaking out when the user's intention is to switch layers.
     if (!g_buttonChordActive && M5.BtnA.isPressed() && M5.BtnB.isPressed()) {
         if (g_leftAgentPressed >= 0) {
             if (g_leftPressedActionLayer) {
@@ -863,6 +914,8 @@ void handlePhysicalButtons() {
     }
 
     if (g_actionLayer && M5.BtnB.wasPressed()) {
+        // In Action mode the physical buttons map spatially to OK and NG.
+        // Delay NG briefly for the same chord-detection reason as the left key.
         g_rightActionPending = true;
         g_rightActionPressedAt = millis();
     }
@@ -897,6 +950,8 @@ void handlePhysicalButtons() {
     }
 
     if (M5.BtnB.wasPressed()) {
+        // Outside Action mode, a right-button tap invokes the assistant and a
+        // hold becomes push-to-talk. The threshold keeps both gestures quick.
         g_rightLongTriggered = false;
         g_rightPhysicalPressedAt = millis();
         g_uiDirty = true;
@@ -929,6 +984,10 @@ void handlePhysicalButtons() {
         renderUi(millis());
     }
 }
+
+// -----------------------------------------------------------------------------
+// Rendering
+// -----------------------------------------------------------------------------
 
 void drawAmbient(std::uint32_t now) {
     const float brightness = effectBrightness(g_ambient.effect, g_ambient.brightness, g_ambient.speed, now);
@@ -1201,6 +1260,8 @@ void renderSettingsUi() {
 }
 
 void renderUi(std::uint32_t now) {
+    // Redraw the small round display as one frame. The UI is simple enough that
+    // full-frame painting avoids stale pixels when switching between layers.
     M5.Display.startWrite();
     M5.Display.fillScreen(TFT_BLACK);
     drawAmbient(now);
@@ -1332,7 +1393,13 @@ void renderUi(std::uint32_t now) {
 
 }  // namespace
 
+// -----------------------------------------------------------------------------
+// Arduino lifecycle
+// -----------------------------------------------------------------------------
+
 void setup() {
+    // Initialize hardware and local state before advertising the BLE HID. This
+    // ensures the first screen and battery report are valid when a host connects.
     Serial.begin(115200);
     delay(200);
 
@@ -1360,6 +1427,8 @@ void setup() {
 }
 
 void loop() {
+    // Keep input, host messages, deferred restart, haptics, battery updates, and
+    // rendering cooperative; no path should block long enough to starve BLE.
     M5.update();
     handleTouch();
     handlePhysicalButtons();
