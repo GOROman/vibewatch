@@ -1190,23 +1190,27 @@ void drawAssistantGlyph(int x, int y, std::uint16_t color) {
     M5.Display.fillCircle(x + 7, y + 7, 2, color);
 }
 
-void drawPhysicalModeHints() {
-    const auto panel = M5.Display.color565(22, 27, 35);
-    const auto approve = scaledColor(kLeftPhysicalButtonColor, 1.0f);
-    const auto cancel = scaledColor(kRightPhysicalButtonColor, 1.0f);
-    constexpr int hintY = 29;
-    constexpr int leftX = 68;
-    constexpr int rightX = 398;
+void drawPhysicalActionLinks() {
+    // Colored rails enter from the real button positions at the top edge and
+    // terminate under the OK/NG circles. Pressing either side lights its rail.
+    const bool leftActive = g_leftAgentPressed == 1 || g_activeTouch == 1;
+    const bool rightActive = g_rightActionPressed || g_activeTouch == 2;
+    const auto leftColor = scaledColor(kLeftPhysicalButtonColor, 1.0f);
+    const auto rightColor = scaledColor(kRightPhysicalButtonColor, 1.0f);
+    const auto leftGlow = scaledColor(kLeftPhysicalButtonColor, leftActive ? 0.58f : 0.24f);
+    const auto rightGlow = scaledColor(kRightPhysicalButtonColor, rightActive ? 0.58f : 0.24f);
 
-    M5.Display.fillCircle(leftX, hintY, 21, panel);
-    drawThickCircle(leftX, hintY, 21, 3, approve);
-    M5.Display.drawWideLine(leftX - 9, hintY, leftX - 2, hintY + 8, 4.0f, TFT_WHITE);
-    M5.Display.drawWideLine(leftX - 2, hintY + 8, leftX + 11, hintY - 9, 4.0f, TFT_WHITE);
+    // Two short segments make each link follow the curved case rather than
+    // looking like a generic straight divider.
+    M5.Display.drawWideLine(67, 0, 73, 28, leftActive ? 14.0f : 11.0f, leftGlow);
+    M5.Display.drawWideLine(73, 28, 85, 58, leftActive ? 14.0f : 11.0f, leftGlow);
+    M5.Display.drawWideLine(67, 0, 73, 28, 5.0f, leftActive ? TFT_WHITE : leftColor);
+    M5.Display.drawWideLine(73, 28, 85, 58, 5.0f, leftActive ? TFT_WHITE : leftColor);
 
-    M5.Display.fillCircle(rightX, hintY, 21, panel);
-    drawThickCircle(rightX, hintY, 21, 3, cancel);
-    M5.Display.drawWideLine(rightX - 8, hintY - 8, rightX + 8, hintY + 8, 4.0f, TFT_WHITE);
-    M5.Display.drawWideLine(rightX + 8, hintY - 8, rightX - 8, hintY + 8, 4.0f, TFT_WHITE);
+    M5.Display.drawWideLine(399, 0, 393, 28, rightActive ? 14.0f : 11.0f, rightGlow);
+    M5.Display.drawWideLine(393, 28, 381, 58, rightActive ? 14.0f : 11.0f, rightGlow);
+    M5.Display.drawWideLine(399, 0, 393, 28, 5.0f, rightActive ? TFT_WHITE : rightColor);
+    M5.Display.drawWideLine(393, 28, 381, 58, 5.0f, rightActive ? TFT_WHITE : rightColor);
 }
 
 void drawFastGlyph(int x, int y, std::uint16_t color) {
@@ -1403,6 +1407,9 @@ void renderUi(std::uint32_t now) {
     M5.Display.setFont(&fonts::Orbitron_Light_32);
     M5.Display.setTextSize(1);
     const int outerCount = g_actionLayer ? kActionCount : kAgentCount;
+    if (g_actionLayer) {
+        drawPhysicalActionLinks();
+    }
     for (int i = 0; i < outerCount; ++i) {
         const int outerX = g_actionLayer ? actionX[i] : agentX[i];
         const int outerY = g_actionLayer ? actionY[i] : agentY[i];
@@ -1468,9 +1475,10 @@ void renderUi(std::uint32_t now) {
                 "FAST", "OK", "NG", "SPLIT", "AI",
             };
             M5.Display.setFont(&fonts::Orbitron_Light_24);
-            M5.Display.setTextSize(0.50f);
+            M5.Display.setTextSize(0.62f);
             M5.Display.setTextColor(TFT_WHITE);
-            M5.Display.drawString(kOuterActionLabels[i], outerX, outerY + 37);
+            M5.Display.drawString(kOuterActionLabels[i], outerX,
+                                  outerY + kAgentButtonRadius + 13);
             M5.Display.setFont(&fonts::Orbitron_Light_32);
             M5.Display.setTextSize(1);
         } else {
@@ -1510,7 +1518,9 @@ void renderUi(std::uint32_t now) {
         drawSettingsGlyph(kSettingsX, kSettingsY, TFT_WHITE);
     }
 
-    drawStatusBar();
+    if (!g_actionLayer) {
+        drawStatusBar();
+    }
 
     M5.Display.endWrite();
     g_uiDirty = false;
