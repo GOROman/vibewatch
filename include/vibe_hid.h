@@ -9,7 +9,7 @@ constexpr char kDeviceNamePrefix[] = "Vibe Watch #";
 constexpr char kManufacturer[] = "**********";
 constexpr char kModelNumber[] = "**********";
 // Compatibility version used by the reference firmware.
-constexpr char kFirmwareVersion[] = "v0.6.1";
+constexpr char kFirmwareVersion[] = "v1.0";
 
 constexpr std::uint16_t kVendorId = 0x303A;
 constexpr std::uint16_t kProductId = 0x8360;
