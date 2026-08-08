@@ -68,6 +68,10 @@ python3 -m platformio run --target upload
 
 After flashing, open the device settings, tap **PAIR**, and connect to `Vibe Watch #n` from macOS Bluetooth settings.
 
+## License
+
+[MIT License](LICENSE)
+
 ## Disclaimer
 
 This is an independent experimental compatibility project. Third-party manufacturer and model names are intentionally shown as `**********`. It is not official M5Stack firmware.
