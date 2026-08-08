@@ -1,0 +1,1392 @@
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <M5Unified.h>
+#include <NimBLEDevice.h>
+#include <NimBLEHIDDevice.h>
+#include <Preferences.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+#include "vibe_hid.h"
+#include "llmcardputer_sound.h"
+
+namespace {
+
+constexpr int kAgentCount = 6;
+constexpr int kActionCount = 5;
+constexpr int kScreenCenter = 233;
+constexpr int kAgentOrbitRadius = 160;
+constexpr int kAgentButtonRadius = 55;
+constexpr int kMicButtonRadius = 67;
+constexpr int kSettingsX = 72;
+constexpr int kSettingsY = 370;
+constexpr int kSettingsRadius = 22;
+constexpr int kSettingsVisualRadius = 16;
+constexpr int kSettingsCloseX = 340;
+constexpr int kSettingsCloseY = 62;
+constexpr int kSettingsCloseRadius = 31;
+constexpr std::uint32_t kButtonChordGraceMs = 90;
+constexpr std::uint32_t kPhysicalMicHoldMs = 350;
+constexpr std::uint32_t kUiAnimationPeriodMs = 80;
+constexpr std::uint32_t kSelectionAnimationPeriodMs = 24;
+constexpr std::uint32_t kSelectionAnimationBaseMs = 210;
+constexpr std::uint32_t kBatteryUpdatePeriodMs = 30000;
+constexpr char kPreferencesNamespace[] = "vibe-watch";
+constexpr char kDeviceSlotKey[] = "device-slot";
+constexpr char kSeVolumeKey[] = "se-volume";
+
+constexpr int kTouchMic = kAgentCount;
+constexpr int kTouchSettings = kAgentCount + 1;
+constexpr int kTouchSettingsBack = kAgentCount + 2;
+constexpr int kTouchSlot1 = kAgentCount + 3;
+constexpr int kTouchSlot2 = kAgentCount + 4;
+constexpr int kTouchSlot3 = kAgentCount + 5;
+constexpr int kTouchPair = kAgentCount + 6;
+constexpr int kTouchVolume = kAgentCount + 7;
+
+struct AgentState {
+    std::uint32_t color = 0;
+    float brightness = 0.0f;
+    int effect = 0;
+    float speed = 0.0f;
+};
+
+struct AmbientState {
+    std::uint32_t color = 0x304FFE;
+    float brightness = 0.25f;
+    int effect = 0;
+    float speed = 0.4f;
+};
+
+std::array<AgentState, kAgentCount> g_agents;
+AmbientState g_ambient;
+String g_focusedApp;
+
+NimBLEServer* g_server = nullptr;
+NimBLEHIDDevice* g_hid = nullptr;
+NimBLECharacteristic* g_vendorInput = nullptr;
+NimBLECharacteristic* g_vendorOutput = nullptr;
+QueueHandle_t g_rpcQueue = nullptr;
+
+volatile bool g_connected = false;
+volatile bool g_uiDirty = true;
+String g_rxBuffer;
+int g_activeTouch = -1;
+std::uint32_t g_vibrationOffAt = 0;
+std::uint32_t g_lastUiDraw = 0;
+std::uint32_t g_lastBatteryUpdate = 0;
+std::uint8_t g_batteryLevel = 100;
+bool g_isCharging = false;
+bool g_settingsOpen = false;
+int g_deviceSlot = 1;
+int g_pendingDeviceSlot = 1;
+int g_selectedAgent = 0;
+int g_selectedAction = 0;
+float g_selectionX = 0.0f;
+float g_selectionY = 0.0f;
+float g_selectionFromX = 0.0f;
+float g_selectionFromY = 0.0f;
+float g_selectionToX = 0.0f;
+float g_selectionToY = 0.0f;
+float g_selectionFromAngle = 0.0f;
+float g_selectionToAngle = 0.0f;
+std::uint32_t g_selectionAnimationStartedAt = 0;
+std::uint32_t g_selectionAnimationDurationMs = 260;
+bool g_selectionAnimating = false;
+int g_leftAgentPressed = -1;
+bool g_leftPressedActionLayer = false;
+bool g_leftPressPending = false;
+std::uint32_t g_leftPressedAt = 0;
+bool g_rightLongTriggered = false;
+std::uint32_t g_rightPhysicalPressedAt = 0;
+bool g_rightActionPending = false;
+bool g_rightActionPressed = false;
+std::uint32_t g_rightActionPressedAt = 0;
+bool g_buttonChordActive = false;
+bool g_actionLayer = false;
+bool g_touchActionLayer = false;
+std::uint32_t g_restartAt = 0;
+char g_deviceName[24] = {};
+std::uint8_t g_seVolume = 128;
+
+std::array<int, kAgentCount> agentX{};
+std::array<int, kAgentCount> agentY{};
+std::array<int, kActionCount> actionX{};
+std::array<int, kActionCount> actionY{};
+
+void loadDeviceSlot() {
+    Preferences preferences;
+    preferences.begin(kPreferencesNamespace, true);
+    g_deviceSlot = preferences.getUChar(kDeviceSlotKey, 1);
+    g_seVolume = preferences.getUChar(kSeVolumeKey, 128);
+    preferences.end();
+    if (g_deviceSlot < 1 || g_deviceSlot > 3) {
+        g_deviceSlot = 1;
+    }
+    g_pendingDeviceSlot = g_deviceSlot;
+    std::snprintf(g_deviceName, sizeof(g_deviceName), "%s%d", vibe::kDeviceNamePrefix, g_deviceSlot);
+}
+
+void saveDeviceSlot(int slot) {
+    Preferences preferences;
+    preferences.begin(kPreferencesNamespace, false);
+    preferences.putUChar(kDeviceSlotKey, static_cast<std::uint8_t>(slot));
+    preferences.end();
+}
+
+void saveSeVolume() {
+    Preferences preferences;
+    preferences.begin(kPreferencesNamespace, false);
+    preferences.putUChar(kSeVolumeKey, g_seVolume);
+    preferences.end();
+}
+
+void playSe(float frequency = 880.0f, std::uint32_t durationMs = 35) {
+    llmcardputer_sound::playSquare(frequency, durationMs, g_seVolume);
+}
+
+void playMicSe(bool pressed, std::uint8_t tempoMultiplier = 1) {
+    llmcardputer_sound::playEffect(
+        pressed ? llmcardputer_sound::Effect::Start : llmcardputer_sound::Effect::StartReverse,
+        g_seVolume, tempoMultiplier);
+}
+
+void renderUi(std::uint32_t now);
+
+float clamp01(float value) {
+    return std::max(0.0f, std::min(1.0f, value));
+}
+
+std::uint16_t scaledColor(std::uint32_t packed, float brightness) {
+    const float scale = clamp01(brightness);
+    const auto r = static_cast<std::uint8_t>(((packed >> 16) & 0xFF) * scale);
+    const auto g = static_cast<std::uint8_t>(((packed >> 8) & 0xFF) * scale);
+    const auto b = static_cast<std::uint8_t>((packed & 0xFF) * scale);
+    return M5.Display.color565(r, g, b);
+}
+
+float effectBrightness(int effect, float brightness, float speed, std::uint32_t now) {
+    if (effect == 0 || brightness <= 0.0f) {
+        return 0.0f;
+    }
+    if (effect == 4 || effect == 6) {
+        const float hz = 0.35f + clamp01(speed) * 1.4f;
+        const float phase = static_cast<float>(now % 10000) * 0.001f * hz * 2.0f * PI;
+        const float low = effect == 6 ? 0.5f : 0.15f;
+        return brightness * (low + (1.0f - low) * (0.5f + 0.5f * std::sin(phase)));
+    }
+    return brightness;
+}
+
+bool uiIsAnimated() {
+    if (g_selectionAnimating) {
+        return true;
+    }
+    if (g_ambient.effect == 2 || g_ambient.effect == 3 || g_ambient.effect == 4 || g_ambient.effect == 6) {
+        return true;
+    }
+    for (const auto& state : g_agents) {
+        if (state.effect == 4 || state.effect == 6) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void vibrate(std::uint8_t strength = 120, std::uint32_t durationMs = 25) {
+    M5.Power.setVibration(strength);
+    g_vibrationOffAt = millis() + durationMs;
+}
+
+void updateBattery(bool notify) {
+    const int level = M5.Power.getBatteryLevel();
+    if (level >= 0 && level <= 100) {
+        g_batteryLevel = static_cast<std::uint8_t>(level);
+    }
+    g_isCharging = M5.Power.isCharging() == m5::Power_Class::is_charging;
+    if (g_hid != nullptr) {
+        g_hid->setBatteryLevel(g_batteryLevel, notify && g_connected);
+    }
+    g_lastBatteryUpdate = millis();
+    g_uiDirty = true;
+}
+
+void sendFramedJson(String payload, bool appendCrlf) {
+    if (!g_connected || g_vendorInput == nullptr) {
+        return;
+    }
+    if (appendCrlf && !payload.endsWith("\r\n")) {
+        payload += "\r\n";
+    }
+
+    const std::size_t total = payload.length();
+    std::size_t offset = 0;
+    while (offset < total) {
+        const std::size_t chunk = std::min(vibe::kRpcChunkLength, total - offset);
+        std::uint8_t report[vibe::kBleReportLength] = {};
+        report[0] = vibe::kChannelJsonRpc;
+        report[1] = static_cast<std::uint8_t>(chunk);
+        std::memcpy(&report[2], payload.c_str() + offset, chunk);
+        g_vendorInput->setValue(report, sizeof(report));
+        if (!g_vendorInput->notify()) {
+            Serial.println("BLE notify failed");
+            return;
+        }
+        offset += chunk;
+        if (offset < total) {
+            delay(8);
+        }
+    }
+}
+
+void sendKeyEvent(const char* key, bool pressed) {
+    if (!g_connected || g_vendorInput == nullptr) {
+        return;
+    }
+
+    // Match the working M5Core2 implementation byte-for-byte: one complete
+    // 63-byte vendor report with CRLF included in the payload length.
+    std::uint8_t report[vibe::kBleReportLength] = {};
+    report[0] = vibe::kChannelJsonRpc;
+    const int written = std::snprintf(
+        reinterpret_cast<char*>(&report[2]), vibe::kRpcChunkLength,
+        "{\"m\":\"v.oai.hid\",\"p\":{\"k\":\"%s\",\"act\":%u}}\r\n", key, pressed ? 1U : 0U);
+    if (written < 0 || written >= static_cast<int>(vibe::kRpcChunkLength)) {
+        Serial.println("HID event payload overflow");
+        return;
+    }
+    report[1] = static_cast<std::uint8_t>(written);
+    g_vendorInput->setValue(report, sizeof(report));
+    if (!g_vendorInput->notify()) {
+        Serial.printf("HID notify failed: %s\n", key);
+        return;
+    }
+    Serial.printf("HID %s %s len=%d\n", key, pressed ? "DOWN" : "UP", written);
+}
+
+void sendAgentEvent(int index, bool pressed) {
+    char key[5];
+    std::snprintf(key, sizeof(key), "AG%02d", index);
+    sendKeyEvent(key, pressed);
+}
+
+void sendActionEvent(int index, bool pressed) {
+    char key[6];
+    std::snprintf(key, sizeof(key), "ACT%02d", index);
+    sendKeyEvent(key, pressed);
+}
+
+void sendMicEvent(bool pressed) {
+    sendActionEvent(10, pressed);
+    // NimBLE notifications are asynchronous. Pace the paired MIC reports so
+    // ACT11 cannot overwrite ACT10 in the controller buffer before delivery.
+    delay(12);
+    sendActionEvent(11, pressed);
+}
+
+void applyAgentStatus(JsonVariantConst params) {
+    if (!params.is<JsonArrayConst>()) {
+        return;
+    }
+    for (JsonObjectConst item : params.as<JsonArrayConst>()) {
+        const int id = item["id"] | -1;
+        if (id < 0 || id >= kAgentCount) {
+            continue;
+        }
+        auto& state = g_agents[id];
+        state.color = item["c"] | 0U;
+        state.brightness = item["b"] | 0.0f;
+        state.effect = item["e"] | 0;
+        state.speed = item["s"] | 0.0f;
+    }
+    g_uiDirty = true;
+}
+
+void applyAmbientStatus(JsonVariantConst params) {
+    JsonObjectConst ambient = params["ambient"].as<JsonObjectConst>();
+    if (ambient.isNull()) {
+        return;
+    }
+    g_ambient.color = ambient["c"] | 0U;
+    g_ambient.brightness = ambient["b"] | 0.0f;
+    g_ambient.effect = ambient["e"] | 0;
+    g_ambient.speed = ambient["s"] | 0.0f;
+    g_uiDirty = true;
+}
+
+void applyFocusedApp(JsonVariantConst params) {
+    const char* appName = params["appName"] | "";
+    g_focusedApp = appName;
+    if (g_focusedApp.length() > 18) {
+        g_focusedApp = g_focusedApp.substring(0, 17) + "…";
+    }
+    g_uiDirty = true;
+}
+
+void sendRpcResponse(const char* method, int id) {
+    JsonDocument response;
+    response["id"] = id;
+    response["method"] = method;
+
+    if (std::strcmp(method, "device.status") == 0) {
+        updateBattery(false);
+        JsonObject result = response["result"].to<JsonObject>();
+        result["version"] = vibe::kFirmwareVersion;
+        result["profile_index"] = 0;
+        result["layer_index"] = 1;
+        result["battery"] = g_batteryLevel;
+        result["is_charging"] = g_isCharging;
+    } else if (std::strcmp(method, "sys.version") == 0) {
+        response["result"]["version"] = vibe::kFirmwareVersion;
+    } else {
+        response["result"]["ok"] = 1;
+    }
+
+    String json;
+    serializeJson(response, json);
+    sendFramedJson(json, true);
+    Serial.printf("RPC response: %s id=%d\n", method, id);
+}
+
+void processRpc(const char* json) {
+    JsonDocument request;
+    const DeserializationError error = deserializeJson(request, json);
+    if (error) {
+        Serial.printf("RPC parse failed: %s\n", error.c_str());
+        return;
+    }
+
+    const char* method = request["method"] | request["m"] | "";
+    int id = request["id"] | request["i"] | -1;
+    JsonVariantConst params = request["params"];
+    if (params.isNull()) {
+        params = request["p"];
+    }
+
+    if (std::strcmp(method, "v.oai.thstatus") == 0) {
+        applyAgentStatus(params);
+    } else if (std::strcmp(method, "v.oai.rgbcfg") == 0) {
+        applyAmbientStatus(params);
+    } else if (std::strcmp(method, "host.focused_app") == 0) {
+        applyFocusedApp(params);
+    }
+
+    if (id >= 0 && method[0] != '\0') {
+        sendRpcResponse(method, id);
+    }
+}
+
+class RpcOutputCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
+        const NimBLEAttValue value = characteristic->getValue();
+        const auto* data = value.data();
+        const std::size_t length = value.size();
+        if (data == nullptr || length < 2 || data[0] != vibe::kChannelJsonRpc) {
+            return;
+        }
+
+        const std::size_t chunkLength = data[1];
+        if (chunkLength > vibe::kRpcChunkLength || chunkLength > length - 2) {
+            Serial.println("Invalid RPC chunk");
+            g_rxBuffer = "";
+            return;
+        }
+        if (g_rxBuffer.length() + chunkLength > vibe::kRpcBufferLength) {
+            Serial.println("RPC request too large");
+            g_rxBuffer = "";
+            return;
+        }
+
+        for (std::size_t i = 0; i < chunkLength; ++i) {
+            g_rxBuffer += static_cast<char>(data[i + 2]);
+        }
+
+        JsonDocument probe;
+        const DeserializationError parseResult = deserializeJson(probe, g_rxBuffer);
+        if (parseResult == DeserializationError::IncompleteInput) {
+            return;
+        }
+        if (parseResult) {
+            Serial.printf("Discarding malformed RPC: %s\n", parseResult.c_str());
+            g_rxBuffer = "";
+            return;
+        }
+
+        auto* message = static_cast<char*>(std::malloc(g_rxBuffer.length() + 1));
+        if (message == nullptr) {
+            Serial.println("RPC allocation failed");
+            g_rxBuffer = "";
+            return;
+        }
+        std::memcpy(message, g_rxBuffer.c_str(), g_rxBuffer.length());
+        message[g_rxBuffer.length()] = '\0';
+        if (xQueueSend(g_rpcQueue, &message, 0) != pdTRUE) {
+            Serial.println("RPC queue full");
+            std::free(message);
+        }
+        g_rxBuffer = "";
+    }
+};
+
+class HidServerCallbacks : public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer* server, NimBLEConnInfo& connection) override {
+        g_connected = true;
+        g_uiDirty = true;
+        server->updateConnParams(connection.getConnHandle(), 12, 24, 0, 180);
+        Serial.printf("BLE connected: %s\n", connection.getAddress().toString().c_str());
+    }
+
+    void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
+        g_connected = false;
+        g_activeTouch = -1;
+        g_uiDirty = true;
+        Serial.printf("BLE disconnected: %d\n", reason);
+        NimBLEDevice::startAdvertising();
+    }
+
+    void onAuthenticationComplete(NimBLEConnInfo& connection) override {
+        if (!connection.isEncrypted()) {
+            Serial.println("BLE encryption failed");
+            NimBLEDevice::getServer()->disconnect(connection.getConnHandle());
+        }
+    }
+};
+
+RpcOutputCallbacks g_rpcCallbacks;
+HidServerCallbacks g_serverCallbacks;
+
+void addDeviceInfoCharacteristic(std::uint16_t uuid, const char* value) {
+    auto* characteristic = g_hid->getDeviceInfoService()->createCharacteristic(uuid, NIMBLE_PROPERTY::READ);
+    characteristic->setValue(value);
+}
+
+void initializeBle() {
+    NimBLEDevice::init(g_deviceName);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+    NimBLEDevice::setSecurityAuth(true, false, true);
+
+    g_server = NimBLEDevice::createServer();
+    g_server->setCallbacks(&g_serverCallbacks);
+    g_hid = new NimBLEHIDDevice(g_server);
+
+    g_hid->setManufacturer(vibe::kManufacturer);
+    g_hid->setPnp(0x01, vibe::kVendorId, vibe::kProductId, vibe::kProductVersion);
+    g_hid->setHidInfo(0x00, 0x01);
+    g_hid->setReportMap(vibe::kReportMap, sizeof(vibe::kReportMap));
+
+    char serial[17];
+    std::snprintf(serial, sizeof(serial), "%016llX", ESP.getEfuseMac());
+    addDeviceInfoCharacteristic(0x2A24, vibe::kModelNumber);
+    addDeviceInfoCharacteristic(0x2A25, serial);
+    addDeviceInfoCharacteristic(0x2A26, vibe::kFirmwareVersion);
+
+    auto* keyboardInput = g_hid->getInputReport(1);
+    auto* consumerInput = g_hid->getInputReport(2);
+    auto* pointerInput = g_hid->getInputReport(3);
+    g_vendorInput = g_hid->getInputReport(vibe::kVendorReportId);
+    g_vendorOutput = g_hid->getOutputReport(vibe::kVendorReportId);
+    g_hid->getFeatureReport(vibe::kVendorReportId);
+
+    const std::uint8_t keyboardIdle[8] = {};
+    const std::uint8_t consumerIdle[2] = {};
+    const std::uint8_t pointerIdle[5] = {};
+    const std::uint8_t vendorIdle[vibe::kBleReportLength] = {};
+    keyboardInput->setValue(keyboardIdle, sizeof(keyboardIdle));
+    consumerInput->setValue(consumerIdle, sizeof(consumerIdle));
+    pointerInput->setValue(pointerIdle, sizeof(pointerIdle));
+    g_vendorInput->setValue(vendorIdle, sizeof(vendorIdle));
+    g_vendorOutput->setCallbacks(&g_rpcCallbacks);
+
+    updateBattery(false);
+    if (!g_server->start()) {
+        Serial.println("Failed to start BLE GATT server");
+        return;
+    }
+
+    auto* advertising = NimBLEDevice::getAdvertising();
+    advertising->setName(g_deviceName);
+    advertising->setAppearance(HID_KEYBOARD);
+    advertising->addServiceUUID(g_hid->getHidService()->getUUID());
+    advertising->enableScanResponse(true);
+    advertising->start();
+    Serial.printf("BLE HID advertising started as %s\n", g_deviceName);
+}
+
+void beginPairing() {
+    saveDeviceSlot(g_pendingDeviceSlot);
+
+    if (g_server != nullptr) {
+        const auto peers = g_server->getPeerDevices();
+        for (const auto connectionHandle : peers) {
+            g_server->disconnect(connectionHandle);
+        }
+    }
+    NimBLEDevice::deleteAllBonds();
+
+    g_connected = false;
+    g_deviceSlot = g_pendingDeviceSlot;
+    std::snprintf(g_deviceName, sizeof(g_deviceName), "%s%d", vibe::kDeviceNamePrefix, g_deviceSlot);
+    g_restartAt = millis() + 900;
+    g_uiDirty = true;
+    Serial.printf("Pairing requested for %s; restarting\n", g_deviceName);
+}
+
+void initializeAgentPositions() {
+    for (int i = 0; i < kAgentCount; ++i) {
+        // Flat-top hexagon: leaves a readable status area at the bottom while
+        // pushing all six agent buttons toward the circular bezel.
+        const float angle = (-120.0f + 60.0f * i) * PI / 180.0f;
+        agentX[i] = kScreenCenter + static_cast<int>(std::cos(angle) * kAgentOrbitRadius);
+        agentY[i] = kScreenCenter + static_cast<int>(std::sin(angle) * kAgentOrbitRadius);
+    }
+    // FAST, OK, NG, SPLIT, AI. OK/NG sit directly below the left/right
+    // physical buttons; the other three follow the lower circular edge.
+    actionX = {70, 112, 354, 233, 396};
+    actionY = {250, 105, 105, 368, 250};
+    g_selectionX = static_cast<float>(agentX[g_selectedAgent]);
+    g_selectionY = static_cast<float>(agentY[g_selectedAgent]);
+    g_selectionFromX = g_selectionToX = g_selectionX;
+    g_selectionFromY = g_selectionToY = g_selectionY;
+    g_selectionFromAngle = g_selectionToAngle =
+        std::atan2(g_selectionY - kScreenCenter, g_selectionX - kScreenCenter);
+}
+
+float selectionProgress(std::uint32_t now) {
+    if (!g_selectionAnimating) {
+        return 1.0f;
+    }
+    return clamp01(static_cast<float>(now - g_selectionAnimationStartedAt) /
+                   static_cast<float>(g_selectionAnimationDurationMs));
+}
+
+float smoothSelectionProgress(float progress) {
+    // Cosine ease-in/out gives the ring a soft launch and a clean, magnetic
+    // landing without the abrupt midpoint acceleration of linear movement.
+    return 0.5f - 0.5f * std::cos(progress * PI);
+}
+
+void selectionPositionAt(std::uint32_t now, float& x, float& y) {
+    const float eased = smoothSelectionProgress(selectionProgress(now));
+    const float angle = g_selectionFromAngle +
+                        (g_selectionToAngle - g_selectionFromAngle) * eased;
+    x = kScreenCenter + std::cos(angle) * kAgentOrbitRadius;
+    y = kScreenCenter + std::sin(angle) * kAgentOrbitRadius;
+}
+
+void selectAgent(int index) {
+    if (index < 0 || index >= kAgentCount || index == g_selectedAgent) {
+        return;
+    }
+    const std::uint32_t now = millis();
+    selectionPositionAt(now, g_selectionX, g_selectionY);
+    const float currentAngle = std::atan2(g_selectionY - kScreenCenter,
+                                          g_selectionX - kScreenCenter);
+    const float targetAngle = std::atan2(static_cast<float>(agentY[index] - kScreenCenter),
+                                         static_cast<float>(agentX[index] - kScreenCenter));
+    float angleDelta = targetAngle - currentAngle;
+    while (angleDelta > PI) {
+        angleDelta -= 2.0f * PI;
+    }
+    while (angleDelta < -PI) {
+        angleDelta += 2.0f * PI;
+    }
+    g_selectionFromX = g_selectionX;
+    g_selectionFromY = g_selectionY;
+    g_selectionToX = static_cast<float>(agentX[index]);
+    g_selectionToY = static_cast<float>(agentY[index]);
+    g_selectionFromAngle = currentAngle;
+    g_selectionToAngle = currentAngle + angleDelta;
+    // Nearby steps stay snappy; a jump across the dial gets enough time to
+    // remain readable. Range is roughly 260-360 ms.
+    g_selectionAnimationDurationMs = kSelectionAnimationBaseMs +
+        static_cast<std::uint32_t>(150.0f * std::abs(angleDelta) / PI);
+    g_selectionAnimationStartedAt = now;
+    g_selectionAnimating = true;
+    g_selectedAgent = index;
+    g_uiDirty = true;
+}
+
+bool pointInRect(int x, int y, int left, int top, int width, int height) {
+    return x >= left && x < left + width && y >= top && y < top + height;
+}
+
+int hitTestSettings(int x, int y) {
+    const int backDx = x - kSettingsCloseX;
+    const int backDy = y - kSettingsCloseY;
+    if (backDx * backDx + backDy * backDy <= kSettingsCloseRadius * kSettingsCloseRadius) {
+        return kTouchSettingsBack;
+    }
+    for (int i = 0; i < 3; ++i) {
+        const int dx = x - (122 + i * 111);
+        const int dy = y - 150;
+        if (dx * dx + dy * dy <= 48 * 48) {
+            return kTouchSlot1 + i;
+        }
+    }
+    if (pointInRect(x, y, 113, 215, 240, 76)) {
+        return kTouchPair;
+    }
+    if (pointInRect(x, y, 80, 325, 306, 80)) {
+        return kTouchVolume;
+    }
+    return -1;
+}
+
+int hitTestMain(int x, int y) {
+    const int settingsDx = x - kSettingsX;
+    const int settingsDy = y - kSettingsY;
+    if (!g_actionLayer &&
+        settingsDx * settingsDx + settingsDy * settingsDy <= kSettingsRadius * kSettingsRadius) {
+        return kTouchSettings;
+    }
+    const int outerCount = g_actionLayer ? kActionCount : kAgentCount;
+    for (int i = 0; i < outerCount; ++i) {
+        const int dx = x - (g_actionLayer ? actionX[i] : agentX[i]);
+        const int dy = y - (g_actionLayer ? actionY[i] : agentY[i]);
+        if (dx * dx + dy * dy <= kAgentButtonRadius * kAgentButtonRadius) {
+            return i;
+        }
+    }
+    const int dx = x - kScreenCenter;
+    const int dy = y - kScreenCenter;
+    if (dx * dx + dy * dy <= kMicButtonRadius * kMicButtonRadius) {
+        return kTouchMic;
+    }
+    return -1;
+}
+
+void updateVolumeFromTouch(int x) {
+    const int boundedX = std::max(103, std::min(363, x));
+    g_seVolume = static_cast<std::uint8_t>((boundedX - 103) * 255 / 260);
+    M5.Speaker.setVolume(g_seVolume);
+    g_uiDirty = true;
+}
+
+void sendOuterActionEvent(int index, bool pressed) {
+    sendActionEvent(index == 4 ? 12 : 6 + index, pressed);
+}
+
+void playOuterActionPressSe(int index) {
+    playSe(900.0f + index * 75.0f, 40);
+}
+
+void handleSettingsTouch(const m5::Touch_Class::touch_detail_t& touch) {
+    if (touch.wasPressed()) {
+        g_activeTouch = hitTestSettings(touch.x, touch.y);
+        if (g_activeTouch == kTouchSettingsBack) {
+            g_settingsOpen = false;
+            playSe(540.0f);
+            vibrate(80, 20);
+        } else if (g_activeTouch >= kTouchSlot1 && g_activeTouch <= kTouchSlot3) {
+            g_pendingDeviceSlot = 1 + g_activeTouch - kTouchSlot1;
+            playSe(760.0f + g_pendingDeviceSlot * 90.0f);
+            vibrate(80, 20);
+        } else if (g_activeTouch == kTouchPair) {
+            playSe(1100.0f, 55);
+            vibrate(150, 35);
+        } else if (g_activeTouch == kTouchVolume) {
+            updateVolumeFromTouch(touch.x);
+        }
+        g_uiDirty = true;
+    }
+    if (touch.isPressed() && g_activeTouch == kTouchVolume) {
+        updateVolumeFromTouch(touch.x);
+    }
+    if (touch.wasReleased() && g_activeTouch >= 0) {
+        if (g_activeTouch == kTouchPair) {
+            beginPairing();
+        } else if (g_activeTouch == kTouchVolume) {
+            saveSeVolume();
+            playSe(980.0f, 70);
+        }
+        g_activeTouch = -1;
+        g_uiDirty = true;
+    }
+}
+
+void handleTouch() {
+    const auto touch = M5.Touch.getDetail();
+    if (g_settingsOpen) {
+        handleSettingsTouch(touch);
+        return;
+    }
+
+    if (touch.wasPressed()) {
+        g_activeTouch = hitTestMain(touch.x, touch.y);
+        g_touchActionLayer = g_actionLayer;
+        if (g_activeTouch >= 0 && g_activeTouch < kAgentCount) {
+            if (g_touchActionLayer) {
+                g_selectedAction = g_activeTouch;
+                sendOuterActionEvent(g_activeTouch, true);
+                playOuterActionPressSe(g_activeTouch);
+            } else {
+                selectAgent(g_activeTouch);
+                sendAgentEvent(g_activeTouch, true);
+                playSe(820.0f + g_activeTouch * 55.0f);
+            }
+            vibrate();
+        } else if (g_activeTouch == kTouchMic) {
+            // The center is always a dedicated PTT button. Send DOWN at the
+            // touch edge so AI assistant starts listening immediately.
+            sendMicEvent(true);
+            playMicSe(true);
+            vibrate(150, 35);
+        } else if (g_activeTouch == kTouchSettings) {
+            g_settingsOpen = true;
+            g_pendingDeviceSlot = g_deviceSlot;
+            playSe(760.0f);
+            vibrate(80, 20);
+        }
+        g_uiDirty = true;
+    }
+
+    if (touch.wasReleased() && g_activeTouch >= 0) {
+        if (g_activeTouch < kAgentCount) {
+            if (g_touchActionLayer) {
+                sendOuterActionEvent(g_activeTouch, false);
+            } else {
+                sendAgentEvent(g_activeTouch, false);
+            }
+        } else if (g_activeTouch == kTouchMic) {
+            sendMicEvent(false);
+            playMicSe(false);
+        }
+        g_activeTouch = -1;
+        g_uiDirty = true;
+    }
+}
+
+void handlePhysicalButtons() {
+    // Treat the two physical buttons as a chord before dispatching either
+    // single-button action. This toggles the six outer circles as one layer.
+    if (!g_buttonChordActive && M5.BtnA.isPressed() && M5.BtnB.isPressed()) {
+        if (g_leftAgentPressed >= 0) {
+            if (g_leftPressedActionLayer) {
+                sendOuterActionEvent(g_leftAgentPressed, false);
+            } else {
+                sendAgentEvent(g_leftAgentPressed, false);
+            }
+            g_leftAgentPressed = -1;
+        }
+        if (g_rightLongTriggered) {
+            sendMicEvent(false);
+            playMicSe(false);
+            g_rightLongTriggered = false;
+        }
+        g_rightPhysicalPressedAt = 0;
+        if (g_rightActionPressed) {
+            sendOuterActionEvent(2, false);
+            g_rightActionPressed = false;
+        }
+        g_leftPressPending = false;
+        g_rightActionPending = false;
+        g_actionLayer = !g_actionLayer;
+        g_selectionAnimating = false;
+        g_selectionX = g_selectionToX = static_cast<float>(agentX[g_selectedAgent]);
+        g_selectionY = g_selectionToY = static_cast<float>(agentY[g_selectedAgent]);
+        g_selectionFromX = g_selectionX;
+        g_selectionFromY = g_selectionY;
+        g_selectionFromAngle = g_selectionToAngle =
+            std::atan2(g_selectionY - kScreenCenter, g_selectionX - kScreenCenter);
+        g_buttonChordActive = true;
+        playSe(g_actionLayer ? 1120.0f : 680.0f, 48);
+        vibrate(170, 42);
+        g_uiDirty = true;
+        renderUi(millis());
+        return;
+    }
+    if (g_buttonChordActive) {
+        if (!M5.BtnA.isPressed() && !M5.BtnB.isPressed()) {
+            g_buttonChordActive = false;
+        }
+        return;
+    }
+
+    if (M5.BtnA.wasPressed()) {
+        // Wait briefly so a near-simultaneous right press can become a chord
+        // without emitting an unwanted Agent or action click first.
+        g_leftPressPending = true;
+        g_leftPressedAt = millis();
+    }
+    if (g_leftPressPending && M5.BtnA.isPressed() &&
+        millis() - g_leftPressedAt >= kButtonChordGraceMs) {
+        g_leftPressPending = false;
+        g_leftPressedActionLayer = g_actionLayer;
+        if (g_actionLayer) {
+            g_selectedAction = 1;
+            g_leftAgentPressed = 1;
+            sendOuterActionEvent(g_leftAgentPressed, true);
+            playOuterActionPressSe(g_leftAgentPressed);
+        } else {
+            selectAgent((g_selectedAgent + 1) % kAgentCount);
+            g_leftAgentPressed = g_selectedAgent;
+            sendAgentEvent(g_leftAgentPressed, true);
+            playSe(820.0f + g_selectedAgent * 55.0f, 33);
+        }
+        vibrate();
+        g_uiDirty = true;
+    }
+    if (M5.BtnA.wasReleased()) {
+        if (g_leftPressPending) {
+            // Preserve very quick single clicks that end inside the chord
+            // grace window.
+            g_leftPressPending = false;
+            g_leftPressedActionLayer = g_actionLayer;
+            if (g_actionLayer) {
+                g_selectedAction = 1;
+                g_leftAgentPressed = 1;
+                sendOuterActionEvent(g_leftAgentPressed, true);
+                playOuterActionPressSe(g_leftAgentPressed);
+            } else {
+                selectAgent((g_selectedAgent + 1) % kAgentCount);
+                g_leftAgentPressed = g_selectedAgent;
+                sendAgentEvent(g_leftAgentPressed, true);
+                playSe(820.0f + g_selectedAgent * 55.0f, 33);
+            }
+            delay(12);
+        }
+        if (g_leftAgentPressed >= 0) {
+            if (g_leftPressedActionLayer) {
+                sendOuterActionEvent(g_leftAgentPressed, false);
+            } else {
+                sendAgentEvent(g_leftAgentPressed, false);
+            }
+            g_leftAgentPressed = -1;
+        }
+        g_leftPressedActionLayer = false;
+        g_uiDirty = true;
+    }
+
+    if (g_actionLayer && M5.BtnB.wasPressed()) {
+        g_rightActionPending = true;
+        g_rightActionPressedAt = millis();
+    }
+    if (g_actionLayer && g_rightActionPending && M5.BtnB.isPressed() &&
+        millis() - g_rightActionPressedAt >= kButtonChordGraceMs) {
+        g_rightActionPending = false;
+        g_rightActionPressed = true;
+        g_selectedAction = 2;
+        sendOuterActionEvent(2, true);
+        playOuterActionPressSe(2);
+        vibrate();
+        g_uiDirty = true;
+    }
+    if (g_actionLayer && M5.BtnB.wasReleased()) {
+        if (g_rightActionPending) {
+            g_rightActionPending = false;
+            g_selectedAction = 2;
+            sendOuterActionEvent(2, true);
+            playOuterActionPressSe(2);
+            delay(12);
+            sendOuterActionEvent(2, false);
+            vibrate();
+        } else if (g_rightActionPressed) {
+            sendOuterActionEvent(2, false);
+            g_rightActionPressed = false;
+        }
+        g_uiDirty = true;
+        return;
+    }
+    if (g_actionLayer) {
+        return;
+    }
+
+    if (M5.BtnB.wasPressed()) {
+        g_rightLongTriggered = false;
+        g_rightPhysicalPressedAt = millis();
+        g_uiDirty = true;
+        renderUi(millis());
+    }
+    if (M5.BtnB.isPressed() && !g_rightLongTriggered &&
+        millis() - g_rightPhysicalPressedAt >= kPhysicalMicHoldMs) {
+        g_rightLongTriggered = true;
+        sendMicEvent(true);
+        vibrate(150, 35);
+        g_uiDirty = true;
+        renderUi(millis());
+        playMicSe(true);
+    }
+    if (M5.BtnB.wasReleased()) {
+        if (g_rightLongTriggered) {
+            sendMicEvent(false);
+            playMicSe(false);
+        } else {
+            // A short click is the AI assistant key (ACT12).
+            sendActionEvent(12, true);
+            delay(12);
+            sendActionEvent(12, false);
+            playSe(1180.0f, 38);
+            vibrate(100, 24);
+        }
+        g_rightLongTriggered = false;
+        g_rightPhysicalPressedAt = 0;
+        g_uiDirty = true;
+        renderUi(millis());
+    }
+}
+
+void drawAmbient(std::uint32_t now) {
+    const float brightness = effectBrightness(g_ambient.effect, g_ambient.brightness, g_ambient.speed, now);
+    const auto dimColor = scaledColor(g_ambient.color, brightness * 0.18f);
+    const auto color = scaledColor(g_ambient.color, brightness);
+    for (int r = 226; r <= 230; ++r) {
+        M5.Display.drawCircle(kScreenCenter, kScreenCenter, r, dimColor);
+    }
+    if (g_ambient.effect == 2 || g_ambient.effect == 3) {
+        const float turnsPerSecond = 0.08f + clamp01(g_ambient.speed) * 0.6f;
+        const float angle = static_cast<float>(now % 20000) * 0.001f * turnsPerSecond * 2.0f * PI;
+        const int x = kScreenCenter + static_cast<int>(std::cos(angle) * 228);
+        const int y = kScreenCenter + static_cast<int>(std::sin(angle) * 228);
+        M5.Display.fillCircle(x, y, 8, color);
+    } else if (g_ambient.effect != 0) {
+        for (int r = 226; r <= 230; ++r) {
+            M5.Display.drawCircle(kScreenCenter, kScreenCenter, r, color);
+        }
+    }
+}
+
+void drawThickCircle(int x, int y, int radius, int thickness, std::uint16_t color) {
+    for (int i = 0; i < thickness; ++i) {
+        M5.Display.drawCircle(x, y, radius - i, color);
+    }
+}
+
+void drawThickRoundRect(int x, int y, int width, int height, int radius, int thickness,
+                        std::uint16_t color) {
+    for (int i = 0; i < thickness; ++i) {
+        M5.Display.drawRoundRect(x + i, y + i, width - i * 2, height - i * 2,
+                                 std::max(1, radius - i), color);
+    }
+}
+
+void drawSelectionIndicator(std::uint32_t now) {
+    const float rawProgress = selectionProgress(now);
+    if (g_selectionAnimating) {
+        // Paint oldest samples first. The dim, narrowing rings form a short
+        // motion-blur tail without requiring an alpha framebuffer.
+        static constexpr std::uint32_t kTrailColors[] = {
+            0x30234D, 0x49346F, 0x684A9A, 0x8964C5,
+        };
+        for (int trail = 4; trail >= 1; --trail) {
+            const float sample = std::max(0.0f, rawProgress - trail * 0.065f);
+            const float eased = smoothSelectionProgress(sample);
+            const float angle = g_selectionFromAngle +
+                                (g_selectionToAngle - g_selectionFromAngle) * eased;
+            const int x = kScreenCenter + static_cast<int>(std::lround(
+                std::cos(angle) * kAgentOrbitRadius));
+            const int y = kScreenCenter + static_cast<int>(std::lround(
+                std::sin(angle) * kAgentOrbitRadius));
+            drawThickCircle(x, y, kAgentButtonRadius + 2, std::max(1, 5 - trail),
+                            scaledColor(kTrailColors[4 - trail], 1.0f));
+        }
+    }
+
+    selectionPositionAt(now, g_selectionX, g_selectionY);
+    const int x = static_cast<int>(std::lround(g_selectionX));
+    const int y = static_cast<int>(std::lround(g_selectionY));
+    drawThickCircle(x, y, kAgentButtonRadius + 4, 3, M5.Display.color565(74, 56, 128));
+    drawThickCircle(x, y, kAgentButtonRadius, 7, M5.Display.color565(163, 132, 255));
+    drawThickCircle(x, y, kAgentButtonRadius - 9, 2, TFT_WHITE);
+
+    if (g_selectionAnimating && rawProgress >= 1.0f) {
+        g_selectionAnimating = false;
+        g_selectionX = g_selectionFromX = g_selectionToX;
+        g_selectionY = g_selectionFromY = g_selectionToY;
+        g_selectionFromAngle = g_selectionToAngle;
+    }
+}
+
+void drawSettingsGlyph(int x, int y, std::uint16_t color) {
+    drawThickCircle(x, y, 8, 2, color);
+    M5.Display.fillCircle(x, y, 3, color);
+    for (int i = 0; i < 8; ++i) {
+        const float angle = i * PI / 4.0f;
+        const int x1 = x + static_cast<int>(std::cos(angle) * 10);
+        const int y1 = y + static_cast<int>(std::sin(angle) * 10);
+        const int x2 = x + static_cast<int>(std::cos(angle) * 15);
+        const int y2 = y + static_cast<int>(std::sin(angle) * 15);
+        M5.Display.drawWideLine(x1, y1, x2, y2, 1.7f, color);
+    }
+}
+
+void drawMicGlyph(int x, int y, std::uint16_t color) {
+    drawThickRoundRect(x - 13, y - 27, 26, 40, 12, 3, color);
+    M5.Display.drawWideLine(x - 21, y - 3, x - 21, y + 7, 2.0f, color);
+    M5.Display.drawWideLine(x + 21, y - 3, x + 21, y + 7, 2.0f, color);
+    M5.Display.drawWideLine(x - 21, y + 7, x - 13, y + 17, 2.0f, color);
+    M5.Display.drawWideLine(x + 21, y + 7, x + 13, y + 17, 2.0f, color);
+    M5.Display.drawWideLine(x - 13, y + 17, x + 13, y + 17, 2.0f, color);
+    M5.Display.drawWideLine(x, y + 17, x, y + 29, 2.0f, color);
+    M5.Display.drawWideLine(x - 11, y + 29, x + 11, y + 29, 2.0f, color);
+}
+
+void drawLargeMicGlyph(int x, int y, std::uint16_t color) {
+    drawThickRoundRect(x - 18, y - 36, 36, 54, 17, 4, color);
+    M5.Display.drawWideLine(x - 29, y - 5, x - 29, y + 9, 3.5f, color);
+    M5.Display.drawWideLine(x + 29, y - 5, x + 29, y + 9, 3.5f, color);
+    M5.Display.drawWideLine(x - 29, y + 9, x - 18, y + 23, 3.5f, color);
+    M5.Display.drawWideLine(x + 29, y + 9, x + 18, y + 23, 3.5f, color);
+    M5.Display.drawWideLine(x - 18, y + 23, x + 18, y + 23, 3.5f, color);
+    M5.Display.drawWideLine(x, y + 23, x, y + 39, 3.5f, color);
+    M5.Display.drawWideLine(x - 15, y + 39, x + 15, y + 39, 3.5f, color);
+}
+
+void drawAssistantGlyph(int x, int y, std::uint16_t color) {
+    drawThickCircle(x, y, 24, 3, color);
+    M5.Display.drawWideLine(x - 11, y, x - 3, y - 8, 3.0f, color);
+    M5.Display.drawWideLine(x - 3, y - 8, x + 8, y - 5, 3.0f, color);
+    M5.Display.drawWideLine(x + 8, y - 5, x + 13, y + 6, 3.0f, color);
+    M5.Display.fillCircle(x - 6, y + 7, 2, color);
+    M5.Display.fillCircle(x + 7, y + 7, 2, color);
+}
+
+void drawPhysicalModeHints() {
+    const auto panel = M5.Display.color565(22, 27, 35);
+    const auto approve = M5.Display.color565(48, 206, 125);
+    const auto cancel = M5.Display.color565(245, 83, 103);
+    constexpr int hintY = 29;
+    constexpr int leftX = 68;
+    constexpr int rightX = 398;
+
+    M5.Display.fillCircle(leftX, hintY, 21, panel);
+    drawThickCircle(leftX, hintY, 21, 3, approve);
+    M5.Display.drawWideLine(leftX - 9, hintY, leftX - 2, hintY + 8, 4.0f, TFT_WHITE);
+    M5.Display.drawWideLine(leftX - 2, hintY + 8, leftX + 11, hintY - 9, 4.0f, TFT_WHITE);
+
+    M5.Display.fillCircle(rightX, hintY, 21, panel);
+    drawThickCircle(rightX, hintY, 21, 3, cancel);
+    M5.Display.drawWideLine(rightX - 8, hintY - 8, rightX + 8, hintY + 8, 4.0f, TFT_WHITE);
+    M5.Display.drawWideLine(rightX + 8, hintY - 8, rightX - 8, hintY + 8, 4.0f, TFT_WHITE);
+}
+
+void drawFastGlyph(int x, int y, std::uint16_t color) {
+    M5.Display.drawWideLine(x + 10, y - 28, x - 13, y + 1, 7.0f, color);
+    M5.Display.drawWideLine(x - 13, y + 1, x + 3, y + 1, 7.0f, color);
+    M5.Display.drawWideLine(x + 3, y + 1, x - 8, y + 29, 7.0f, color);
+    M5.Display.drawWideLine(x - 8, y + 29, x + 18, y - 7, 7.0f, color);
+}
+
+void drawApproveGlyph(int x, int y, std::uint16_t color) {
+    drawThickCircle(x, y, 27, 3, color);
+    M5.Display.drawWideLine(x - 14, y, x - 4, y + 12, 5.0f, color);
+    M5.Display.drawWideLine(x - 4, y + 12, x + 17, y - 14, 5.0f, color);
+}
+
+void drawRejectGlyph(int x, int y, std::uint16_t color) {
+    drawThickCircle(x, y, 27, 3, color);
+    M5.Display.drawWideLine(x - 13, y - 13, x + 13, y + 13, 5.0f, color);
+    M5.Display.drawWideLine(x + 13, y - 13, x - 13, y + 13, 5.0f, color);
+}
+
+void drawSplitGlyph(int x, int y, std::uint16_t color) {
+    M5.Display.drawWideLine(x - 22, y, x - 4, y, 4.0f, color);
+    M5.Display.drawWideLine(x - 4, y, x + 15, y - 18, 4.0f, color);
+    M5.Display.drawWideLine(x - 4, y, x + 15, y + 18, 4.0f, color);
+    M5.Display.drawWideLine(x + 15, y - 18, x + 15, y - 8, 4.0f, color);
+    M5.Display.drawWideLine(x + 15, y - 18, x + 5, y - 18, 4.0f, color);
+    M5.Display.drawWideLine(x + 15, y + 18, x + 15, y + 8, 4.0f, color);
+    M5.Display.drawWideLine(x + 15, y + 18, x + 5, y + 18, 4.0f, color);
+}
+
+void drawSwipeChevron(int x, int y, bool pointsRight, std::uint16_t color) {
+    const int direction = pointsRight ? 1 : -1;
+    M5.Display.drawWideLine(x - direction * 4, y - 7, x + direction * 3, y, 2.0f, color);
+    M5.Display.drawWideLine(x + direction * 3, y, x - direction * 4, y + 7, 2.0f, color);
+}
+
+void drawCenterActionGlyph(int action, int x, int y, std::uint16_t color) {
+    switch (action) {
+        case 0:
+            drawMicGlyph(x, y - 4, color);
+            break;
+        case 1:
+            drawFastGlyph(x, y - 5, color);
+            break;
+        case 2:
+            drawApproveGlyph(x, y - 5, color);
+            break;
+        case 3:
+            drawRejectGlyph(x, y - 5, color);
+            break;
+        default:
+            drawSplitGlyph(x, y - 5, color);
+            break;
+    }
+}
+
+void drawStatusBar() {
+    const auto panel = M5.Display.color565(21, 24, 31);
+    const auto stateColor = g_connected ? M5.Display.color565(66, 232, 139)
+                                        : M5.Display.color565(255, 174, 54);
+    M5.Display.fillRoundRect(151, 426, 164, 26, 13, panel);
+    drawThickRoundRect(151, 426, 164, 26, 13, 2, stateColor);
+
+    char status[40];
+    if (g_restartAt != 0) {
+        std::snprintf(status, sizeof(status), "RESTART  #%d", g_deviceSlot);
+    } else {
+        std::snprintf(status, sizeof(status), "%s  #%d  %u%%%s", g_connected ? "ON" : "PAIR",
+                      g_deviceSlot, g_batteryLevel, g_isCharging ? "+" : "");
+    }
+    M5.Display.setFont(&fonts::Orbitron_Light_24);
+    M5.Display.setTextSize(0.75f);
+    M5.Display.setTextColor(TFT_WHITE, panel);
+    M5.Display.drawString(status, kScreenCenter, 439);
+}
+
+void renderSettingsUi() {
+    const auto panel = M5.Display.color565(27, 30, 38);
+    const auto panelBorder = M5.Display.color565(118, 124, 142);
+    const auto purple = M5.Display.color565(145, 120, 255);
+    const auto muted = M5.Display.color565(205, 210, 222);
+
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setFont(&fonts::Orbitron_Light_32);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.drawString("BLUETOOTH", kScreenCenter, 48);
+    M5.Display.setFont(&fonts::DejaVu18);
+    M5.Display.setTextColor(muted, TFT_BLACK);
+    M5.Display.drawString("DEVICE NAME", kScreenCenter, 82);
+
+    M5.Display.fillCircle(kSettingsCloseX, kSettingsCloseY, kSettingsCloseRadius, panel);
+    drawThickCircle(kSettingsCloseX, kSettingsCloseY, kSettingsCloseRadius, 3, panelBorder);
+    M5.Display.drawWideLine(kSettingsCloseX - 10, kSettingsCloseY - 10, kSettingsCloseX + 10,
+                            kSettingsCloseY + 10, 2.5f, TFT_WHITE);
+    M5.Display.drawWideLine(kSettingsCloseX + 10, kSettingsCloseY - 10, kSettingsCloseX - 10,
+                            kSettingsCloseY + 10, 2.5f, TFT_WHITE);
+
+    M5.Display.setFont(&fonts::DejaVu24);
+    for (int i = 0; i < 3; ++i) {
+        const int slot = i + 1;
+        const int x = 122 + i * 111;
+        const bool selected = slot == g_pendingDeviceSlot;
+        M5.Display.fillCircle(x, 150, 46, selected ? purple : panel);
+        drawThickCircle(x, 150, 46, selected ? 5 : 3, selected ? TFT_WHITE : panelBorder);
+        M5.Display.setTextColor(TFT_WHITE, selected ? purple : panel);
+        char label[4];
+        std::snprintf(label, sizeof(label), "#%d", slot);
+        M5.Display.drawString(label, x, 150);
+    }
+
+    const bool pairPressed = g_activeTouch == kTouchPair;
+    const auto pairFill = pairPressed ? M5.Display.color565(103, 81, 220) : purple;
+    M5.Display.fillRoundRect(113, 215, 240, 76, 38, pairFill);
+    drawThickRoundRect(113, 215, 240, 76, 38, pairPressed ? 6 : 4,
+                       pairPressed ? TFT_WHITE : panelBorder);
+    M5.Display.setTextColor(TFT_WHITE, pairFill);
+    M5.Display.drawString("PAIR", kScreenCenter, 253);
+
+    M5.Display.setFont(&fonts::DejaVu18);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    char volumeLabel[24];
+    std::snprintf(volumeLabel, sizeof(volumeLabel), "SE VOLUME  %u%%",
+                  static_cast<unsigned>(g_seVolume) * 100 / 255);
+    M5.Display.drawString(volumeLabel, kScreenCenter, 326);
+
+    const int volumeX = 103 + static_cast<int>(g_seVolume) * 260 / 255;
+    M5.Display.drawWideLine(103, 368, 363, 368, 7.0f, panelBorder);
+    if (volumeX > 103) {
+        M5.Display.drawWideLine(103, 368, volumeX, 368, 7.0f, purple);
+    }
+    M5.Display.fillCircle(volumeX, 368, 15, TFT_WHITE);
+    drawThickCircle(volumeX, 368, 15, 3, purple);
+
+    drawStatusBar();
+}
+
+void renderUi(std::uint32_t now) {
+    M5.Display.startWrite();
+    M5.Display.fillScreen(TFT_BLACK);
+    drawAmbient(now);
+
+    if (g_settingsOpen) {
+        renderSettingsUi();
+        M5.Display.endWrite();
+        g_uiDirty = false;
+        g_lastUiDraw = now;
+        return;
+    }
+
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setFont(&fonts::Orbitron_Light_32);
+    M5.Display.setTextSize(1);
+    const int outerCount = g_actionLayer ? kActionCount : kAgentCount;
+    for (int i = 0; i < outerCount; ++i) {
+        const int outerX = g_actionLayer ? actionX[i] : agentX[i];
+        const int outerY = g_actionLayer ? actionY[i] : agentY[i];
+        std::uint16_t fill = M5.Display.color565(17, 22, 28);
+        std::uint16_t accent = M5.Display.color565(105, 114, 132);
+        bool selected = false;
+        if (g_actionLayer) {
+            static constexpr std::uint32_t kActionColors[kActionCount] = {
+                0x9D74FF, 0x30CE7D, 0xF55367, 0x33C4E8, 0xE5E8EF,
+            };
+            accent = scaledColor(kActionColors[i], 1.0f);
+            selected = g_selectedAction == i;
+        } else {
+            const auto& state = g_agents[i];
+            const float brightness = effectBrightness(state.effect, state.brightness, state.speed, now);
+            fill = state.effect == 0 || state.color == 0
+                       ? M5.Display.color565(17, 22, 28)
+                       : scaledColor(state.color, brightness);
+            // Agent selection is rendered by one independently animated ring
+            // after all six circles have been painted.
+            selected = false;
+            accent = M5.Display.color565(163, 132, 255);
+        }
+        const bool pressed = g_activeTouch == i || g_leftAgentPressed == i ||
+                             (g_actionLayer && g_rightActionPressed && i == 2);
+        if (g_actionLayer && pressed) {
+            fill = accent;
+        }
+        M5.Display.fillCircle(outerX, outerY, kAgentButtonRadius, fill);
+        if (selected) {
+            // A three-stage edge stays visible against both dark and bright
+            // agent colors: outer glow, saturated edge, then white keyline.
+            drawThickCircle(outerX, outerY, kAgentButtonRadius + 4, 3,
+                            g_actionLayer ? scaledColor(0x34303F, 1.0f)
+                                          : M5.Display.color565(74, 56, 128));
+        }
+        const auto borderColor = pressed ? TFT_WHITE
+                                         : selected ? accent
+                                                    : g_actionLayer ? accent
+                                                                    : M5.Display.color565(105, 114, 132);
+        drawThickCircle(outerX, outerY, kAgentButtonRadius, pressed ? 7 : selected ? 7 : 3,
+                        borderColor);
+        if (pressed) {
+            drawThickCircle(outerX, outerY, kAgentButtonRadius - 8, 2, TFT_WHITE);
+        } else if (selected) {
+            drawThickCircle(outerX, outerY, kAgentButtonRadius - 9, 2, TFT_WHITE);
+        }
+        if (g_actionLayer) {
+            const int glyphY = outerY - 10;
+            if (i == 0) {
+                drawFastGlyph(outerX, glyphY, TFT_WHITE);
+            } else if (i == 1) {
+                drawApproveGlyph(outerX, glyphY, TFT_WHITE);
+            } else if (i == 2) {
+                drawRejectGlyph(outerX, glyphY, TFT_WHITE);
+            } else if (i == 3) {
+                drawSplitGlyph(outerX, glyphY, TFT_WHITE);
+            } else {
+                drawAssistantGlyph(outerX, glyphY, TFT_WHITE);
+            }
+            static constexpr const char* kOuterActionLabels[kActionCount] = {
+                "FAST", "OK", "NG", "SPLIT", "AI",
+            };
+            M5.Display.setFont(&fonts::Orbitron_Light_24);
+            M5.Display.setTextSize(0.50f);
+            M5.Display.setTextColor(TFT_WHITE);
+            M5.Display.drawString(kOuterActionLabels[i], outerX, outerY + 37);
+            M5.Display.setFont(&fonts::Orbitron_Light_32);
+            M5.Display.setTextSize(1);
+        } else {
+            const int fillRed = ((fill >> 11) & 0x1F) * 255 / 31;
+            const int fillGreen = ((fill >> 5) & 0x3F) * 255 / 63;
+            const int fillBlue = (fill & 0x1F) * 255 / 31;
+            const int fillLuminance = (fillRed * 299 + fillGreen * 587 + fillBlue * 114) / 1000;
+            const auto labelColor = fillLuminance >= 150 ? TFT_BLACK : TFT_WHITE;
+            M5.Display.setTextColor(labelColor);
+            char label[2];
+            std::snprintf(label, sizeof(label), "%d", i + 1);
+            // Slight horizontal overdraw gives the angular Orbitron glyphs
+            // more weight without losing their technical character.
+            M5.Display.drawString(label, outerX - 1, outerY);
+            M5.Display.drawString(label, outerX + 1, outerY);
+            M5.Display.drawString(label, outerX, outerY);
+        }
+    }
+
+    if (!g_actionLayer) {
+        drawSelectionIndicator(now);
+    }
+
+    const bool micPressed = g_rightLongTriggered || g_activeTouch == kTouchMic;
+    const auto micAccent = M5.Display.color565(48, 79, 254);
+    const auto micFill = micPressed ? micAccent : M5.Display.color565(25, 31, 40);
+    M5.Display.fillCircle(kScreenCenter, kScreenCenter, kMicButtonRadius, micFill);
+    drawThickCircle(kScreenCenter, kScreenCenter, kMicButtonRadius, micPressed ? 7 : 4,
+                    micPressed ? TFT_WHITE : micAccent);
+    drawLargeMicGlyph(kScreenCenter, kScreenCenter - 2, TFT_WHITE);
+
+    if (!g_actionLayer) {
+        const auto settingsFill = M5.Display.color565(30, 32, 40);
+        M5.Display.fillCircle(kSettingsX, kSettingsY, kSettingsVisualRadius, settingsFill);
+        drawThickCircle(kSettingsX, kSettingsY, kSettingsVisualRadius, 3,
+                        M5.Display.color565(120, 126, 143));
+        drawSettingsGlyph(kSettingsX, kSettingsY, TFT_WHITE);
+    }
+
+    drawStatusBar();
+
+    M5.Display.endWrite();
+    g_uiDirty = false;
+    g_lastUiDraw = now;
+}
+
+}  // namespace
+
+void setup() {
+    Serial.begin(115200);
+    delay(200);
+
+    auto config = M5.config();
+    config.clear_display = true;
+    config.internal_spk = true;
+    M5.begin(config);
+    M5.Display.setBrightness(80);
+    M5.Display.setRotation(0);
+
+    loadDeviceSlot();
+    M5.Speaker.setVolume(g_seVolume);
+    initializeAgentPositions();
+    g_rpcQueue = xQueueCreate(6, sizeof(char*));
+    if (g_rpcQueue == nullptr) {
+        Serial.println("Failed to create RPC queue");
+        while (true) {
+            delay(1000);
+        }
+    }
+
+    renderUi(millis());
+    initializeBle();
+    g_uiDirty = true;
+}
+
+void loop() {
+    M5.update();
+    handleTouch();
+    handlePhysicalButtons();
+
+    char* message = nullptr;
+    while (xQueueReceive(g_rpcQueue, &message, 0) == pdTRUE) {
+        processRpc(message);
+        std::free(message);
+        message = nullptr;
+    }
+
+    const std::uint32_t now = millis();
+    if (g_restartAt != 0 && static_cast<std::int32_t>(now - g_restartAt) >= 0) {
+        ESP.restart();
+    }
+    if (g_vibrationOffAt != 0 && static_cast<std::int32_t>(now - g_vibrationOffAt) >= 0) {
+        M5.Power.setVibration(0);
+        g_vibrationOffAt = 0;
+    }
+    if (now - g_lastBatteryUpdate >= kBatteryUpdatePeriodMs) {
+        updateBattery(true);
+    }
+    const std::uint32_t uiPeriod = g_selectionAnimating ? kSelectionAnimationPeriodMs
+                                                        : kUiAnimationPeriodMs;
+    if ((g_uiDirty || uiIsAnimated()) && now - g_lastUiDraw >= uiPeriod) {
+        renderUi(now);
+    }
+
+    delay(5);
+}
