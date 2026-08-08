@@ -796,11 +796,15 @@ void sendOuterActionEvent(int index, bool pressed) {
 
 void playOuterActionPressSe(int index) {
     if (index == kOkAction) {
-        sound::playEffect(sound::Effect::Start, g_seVolume, 3);
+        playSe(659.25f, 34);
+        delay(42);
+        playSe(987.77f, 86);
         return;
     }
     if (index == kNgAction) {
-        sound::playEffect(sound::Effect::StartReverse, g_seVolume, 3);
+        playSe(392.00f, 42);
+        delay(50);
+        playSe(293.66f, 105);
         return;
     }
     playSe(900.0f + index * 75.0f, 40);
