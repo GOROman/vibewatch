@@ -92,8 +92,5 @@ After flashing, open the device settings, tap **PAIR**, and connect to `Vibe Wat
 
 ## References
 
+- [M5Stack StopWatch — official documentation](https://docs.m5stack.com/en/core/StopWatch)
 - [OpenAI Codex Micro — official documentation](https://learn.chatgpt.com/docs/features/codex-micro)
-
-## Disclaimer
-
-This is an independent experimental compatibility project inspired by OpenAI Codex Micro. Third-party manufacturer and model values in the firmware are intentionally shown as `**********`. It is not official firmware from OpenAI or M5Stack.
